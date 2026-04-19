@@ -806,8 +806,8 @@ def show_war_room():
         
         st.markdown('<div class="sec-lbl">💻 BOT TASKS · PYTHON CHALLENGES</div>', unsafe_allow_html=True)
         
-        # Organize tasks by category
-        solved = gs.get("bot_solved", {})
+        # Organize tasks by category (using per-team tracking)
+        team_bot_tasks = gs.get("task_done_by_team", {}).get(MT, {})
         categories = {}
         for task_id, task in BOT_TASKS.items():
             cat = task["category"]
@@ -820,7 +820,7 @@ def show_war_room():
         cat_list = ["Neural Architect", "Cipher Breaker", "Stream Vector", "Strategy Matrix", "Anomaly Guard", "Resource Optimizer"]
         for cat in cat_list:
             if cat in categories:
-                solved_count = sum(1 for t in categories[cat] if t["id"] in solved)
+                solved_count = sum(1 for t in categories[cat] if t["id"] in team_bot_tasks)
                 cat_progress[cat] = (solved_count, len(categories[cat]))
         
         # Category selector (tabs)
@@ -847,7 +847,7 @@ def show_war_room():
             
             for idx, task in enumerate(tasks_in_cat):
                 task_id = task["id"]
-                is_solved = task_id in solved
+                is_solved = task_id in team_bot_tasks
                 dc = DIFF_COLOR[task["difficulty"]]
                 
                 with task_cols[idx % 2]:

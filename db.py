@@ -469,10 +469,10 @@ def run_bot_task(task_id: str, user_code: str, team: str, gs: dict) -> tuple[boo
 	
 	task = BOT_TASKS[task_id]
 	
-	# Check if already solved
-	solved = gs.get("bot_solved", {})
-	if task_id in solved:
-		return False, f"✅ Already solved {task_id}. No repeat submissions."
+	# Check if team already solved this task (per-team tracking)
+	team_tasks = gs.get("task_done_by_team", {}).get(team, {})
+	if task_id in team_tasks:
+		return False, f"✅ Your team already solved {task_id}. No repeat submissions."
 	
 	# Check 30-second solve time limit per team
 	now = time.time()
@@ -524,9 +524,8 @@ def run_bot_task(task_id: str, user_code: str, team: str, gs: dict) -> tuple[boo
 		
 		# Success! Mark as solved and update solve time (but AP is handled by caller)
 		solve_times[team] = now
-		gs.setdefault("bot_solved", {})[task_id] = now
-		
-		return True, f"✅ {task['verify_token']}"
+		from datetime import datetime
+		gs.setdefault("task_done_by_team", {}).setdefault(team, {})[task_id] = datetime.utcnow().isoformat()
 	
 	except Exception as e:
 		return False, f"❌ Verification error: {str(e)[:80]}"
