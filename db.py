@@ -358,6 +358,8 @@ def _init_state():
 		"alliances": {},
 		"alliance_reqs": {},
 		"queued_actions": {},
+		"task_done_by_user": {},  # Tracks completed tasks per username: {username: {task_id: timestamp}}
+		"team_task_cooldown": {},  # Tracks cooldown per team: {team: timestamp}
 	}
 
 

@@ -46,9 +46,10 @@ def _normalize_answer(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
-def _team_task_cd_remaining(gs: dict, team: str) -> float:
-    cooldown_map = gs.get("team_task_cooldown", {})
-    end_ts = float(cooldown_map.get(team, 0) or 0)
+def _user_task_cd_remaining(gs: dict, username: str) -> float:
+    """Task cooldown remaining for this specific user (not team-wide)."""
+    cooldown_map = gs.get("user_task_cooldown", {})
+    end_ts = float(cooldown_map.get(username, 0) or 0)
     return max(0.0, end_ts - time.time())
 
 
@@ -125,9 +126,9 @@ def _task_attempt_panel(task: dict, team: str, username: str):
         st.success("You already solved this task.")
         return
 
-    team_cd = _team_task_cd_remaining(live_gs, team)
-    if team_cd > 0:
-        st.error(f"Team cooldown active: {int(team_cd//60):02d}:{int(team_cd%60):02d}")
+    user_cd = _user_task_cd_remaining(live_gs, username)
+    if user_cd > 0:
+        st.error(f"Cooldown active: {int(user_cd//60):02d}:{int(user_cd%60):02d}")
         return
 
     answer = st.text_input("Your Answer", key=f"ans_{task_id}", placeholder="Type your answer")
@@ -147,9 +148,9 @@ def _task_attempt_panel(task: dict, team: str, username: str):
             st.info("Already solved earlier.")
             st.rerun()
 
-        current_cd = _team_task_cd_remaining(current_gs, team)
+        current_cd = _user_task_cd_remaining(current_gs, username)
         if current_cd > 0:
-            st.error(f"Team cooldown active: {int(current_cd//60):02d}:{int(current_cd%60):02d}")
+            st.error(f"Cooldown active: {int(current_cd//60):02d}:{int(current_cd%60):02d}")
             return
 
         if not expected_answer:
@@ -165,15 +166,15 @@ def _task_attempt_panel(task: dict, team: str, username: str):
                 solver_label=username,
             )
             _mark_user_task_done(current_gs, username, task_id)
-            current_gs.setdefault("team_task_cooldown", {})[team] = time.time() + TASK_COOLDOWN_SECS
+            current_gs.setdefault("user_task_cooldown", {})[username] = time.time() + TASK_COOLDOWN_SECS
             save_gs(current_gs)
-            st.success("Correct answer. AP awarded. Team cooldown applied.")
+            st.success("Correct answer. AP awarded. Cooldown applied.")
             st.rerun()
         else:
-            current_gs.setdefault("team_task_cooldown", {})[team] = time.time() + TASK_COOLDOWN_SECS
+            current_gs.setdefault("user_task_cooldown", {})[username] = time.time() + TASK_COOLDOWN_SECS
             save_gs(current_gs)
-            push_ev("TASK", f"Wrong answer on {task_id} by {username}. Team cooldown triggered.", team)
-            st.error(f"Wrong answer. Team cooldown applied for {TASK_COOLDOWN_SECS // 60} minutes.")
+            push_ev("TASK", f"Wrong answer on {task_id} by {username}. Cooldown triggered.", team)
+            st.error(f"Wrong answer. Cooldown applied for {TASK_COOLDOWN_SECS // 60} minutes.")
             st.rerun()
 
 
@@ -247,6 +248,16 @@ def show_war_room():
         remaining = max(0.0, (epoch_end - datetime.utcnow()).total_seconds())
     except Exception:
         remaining = EPOCH_DURATION_SECS
+
+    # ── COOLDOWN TIMER (Independent refresh) ──
+    username = st.session_state.get("username")
+    user_cooldown_remaining = 0.0
+    if username:
+        user_cooldown_remaining = _user_task_cd_remaining(gs, username)
+    
+    # Separate autorefresh for cooldown: update frequently when active, sparse when idle
+    cooldown_check_interval = 500 if user_cooldown_remaining > 0 else 30000
+    st_autorefresh(interval=cooldown_check_interval, limit=None, key="ot_cooldown_check")
 
     # ── EPOCH STATE TRACKING (Rerun only when epoch changes) ──
     if "last_epoch_seen" not in st.session_state:
@@ -775,10 +786,11 @@ def show_war_room():
     # TASKS HUMAN
     # ─────────────────────────────────────────────────────────────
     elif active == "Tasks (Human)":
-        team_cd_rem = _team_task_cd_remaining(gs, MT)
-        if team_cd_rem > 0:
+        # Recalculate fresh cooldown for this render (independent timer)
+        fresh_user_cd = _user_task_cd_remaining(gs, username)
+        if fresh_user_cd > 0:
             st.markdown(
-                f'<div class="cd-bar">⏳ TEAM TASK COOLDOWN — {int(team_cd_rem//60):02d}:{int(team_cd_rem%60):02d} remaining</div>',
+                f'<div class="cd-bar">⏳ COOLDOWN — {int(fresh_user_cd//60):02d}:{int(fresh_user_cd%60):02d} remaining</div>',
                 unsafe_allow_html=True,
             )
 
@@ -800,7 +812,7 @@ def show_war_room():
                 </div>
                 """, unsafe_allow_html=True)
                 btn_cols = st.columns([1, 1] if task.get("link") else [1], gap="small")
-                attempt_disabled = solved or (team_cd_rem > 0)
+                attempt_disabled = solved or (fresh_user_cd > 0)
                 btn_label = "DONE" if solved else f"ATTEMPT +{task['pts']} AP"
                 
                 with btn_cols[0]:
