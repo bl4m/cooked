@@ -62,6 +62,6 @@ def show_team_page():
     st.markdown('<div style="height:1.5rem"></div>', unsafe_allow_html=True)
     if st.button("Sign out", use_container_width=False, key="logout_team"):
         for k in ["logged_in", "username", "user_data", "active_section",
-                  "cooldown", "ws_log", "seeded", "code_outputs"]:
+                  "ws_log", "seeded", "code_outputs"]:
             st.session_state.pop(k, None)
         st.rerun()

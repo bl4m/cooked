@@ -359,7 +359,6 @@ def _init_state():
 		"alliance_reqs": {},
 		"queued_actions": {},
 		"task_done_by_user": {},  # Tracks completed tasks per username: {username: {task_id: timestamp}}
-		"team_task_cooldown": {},  # Tracks cooldown per team: {team: timestamp}
 	}
 
 
@@ -461,7 +460,7 @@ def run_bot_task(task_id: str, user_code: str, team: str, gs: dict) -> tuple[boo
 		(success: bool, message: str)
 	"""
 	import time
-	from config import BOT_TASKS, TASK_COOLDOWN_SECS
+	from config import BOT_TASKS
 	
 	# Check if task exists
 	if task_id not in BOT_TASKS:

@@ -155,6 +155,6 @@ def render_sidebar(gs, tc, dn, MT, my_hp, my_ap, my_terr,
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
         if st.button("⬡  LOGOUT", use_container_width=True):
             for k in ["logged_in", "username", "user_data", "active_tab",
-                      "cooldown", "ws_log", "seeded", "code_outputs"]:
+                      "ws_log", "seeded", "code_outputs"]:
                 st.session_state.pop(k, None)
             st.rerun()

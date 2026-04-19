@@ -7,20 +7,10 @@ import streamlit as st
 import time
 import random
 from db import save_gs, push_ev
-from config import TASKS, DIFF_COLOR, TASK_FAIL_CHANCE, TASK_COOLDOWN_SECS, ACTION_CARDS, TEAM_COLORS
+from config import TASKS, DIFF_COLOR, TASK_FAIL_CHANCE, ACTION_CARDS, TEAM_COLORS
 
 
 def render_tasks_panel(gs, MT, dn):
-    cd_end = st.session_state.cooldown.get(MT, 0)
-    cd_rem = max(0.0, cd_end - time.time())
-
-    if cd_rem > 0:
-        m, s = int(cd_rem // 60), int(cd_rem % 60)
-        st.markdown(
-            f'<div class="cd-bar">⏳ &nbsp;TASK COOLDOWN ACTIVE &nbsp;— &nbsp;{m:02d}:{s:02d} remaining</div>',
-            unsafe_allow_html=True,
-        )
-
     # ── HUMAN TASKS ───────────────────────────────────────────
     with st.expander("👑  MONARCH TASKS · HUMAN PUZZLES", expanded=True):
         st.markdown("""
@@ -122,9 +112,8 @@ def _action_card_mini(card: dict):
 
 def _handle_task_claim(task: dict, gs: dict, MT: str, dn: str, kind: str = "TASK"):
     if random.random() < TASK_FAIL_CHANCE:
-        st.session_state.cooldown[MT] = time.time() + TASK_COOLDOWN_SECS
-        push_ev(kind, f"Task FAILED — Team {MT} entering cooldown", MT)
-        st.error("❌ Task failed! 15-minute cooldown activated.")
+        push_ev(kind, f"Task FAILED — Team {MT}.", MT)
+        st.error("❌ Task failed!")
     else:
         gs["ap"][MT] = int(gs["ap"].get(MT, 0)) + task["pts"]
         save_gs(gs)

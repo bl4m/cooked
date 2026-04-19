@@ -18,8 +18,7 @@ from db import (
 from config import (
     TASKS, DIFF_COLOR, EVENT_COLORS, STARTING_HP, STARTING_AP,
     EPOCH_DURATION_SECS, ATTACK_COST_AP, CELL_COLORS, CELL_GLOW,
-    TERRAIN_SPECIAL, TASK_COOLDOWN_SECS,
-    MONARCH_TASK_PORTAL
+    TERRAIN_SPECIAL, MONARCH_TASK_PORTAL
 )
 from styles.theme import get_full_css
 
@@ -44,13 +43,6 @@ def _cached_load_users():
 
 def _normalize_answer(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
-
-
-def _user_task_cd_remaining(gs: dict, username: str) -> float:
-    """Task cooldown remaining for this specific user (not team-wide)."""
-    cooldown_map = gs.get("user_task_cooldown", {})
-    end_ts = float(cooldown_map.get(username, 0) or 0)
-    return max(0.0, end_ts - time.time())
 
 
 def _user_task_done(gs: dict, username: str, task_id: str) -> bool:
@@ -126,11 +118,6 @@ def _task_attempt_panel(task: dict, team: str, username: str):
         st.success("You already solved this task.")
         return
 
-    user_cd = _user_task_cd_remaining(live_gs, username)
-    if user_cd > 0:
-        st.error(f"Cooldown active: {int(user_cd//60):02d}:{int(user_cd%60):02d}")
-        return
-
     answer = st.text_input("Your Answer", key=f"ans_{task_id}", placeholder="Type your answer")
     c1, c2 = st.columns(2)
     with c1:
@@ -148,10 +135,7 @@ def _task_attempt_panel(task: dict, team: str, username: str):
             st.info("Already solved earlier.")
             st.rerun()
 
-        current_cd = _user_task_cd_remaining(current_gs, username)
-        if current_cd > 0:
-            st.error(f"Cooldown active: {int(current_cd//60):02d}:{int(current_cd%60):02d}")
-            return
+
 
         if not expected_answer:
             st.error("Answer key is not configured for this task.")
@@ -166,15 +150,12 @@ def _task_attempt_panel(task: dict, team: str, username: str):
                 solver_label=username,
             )
             _mark_user_task_done(current_gs, username, task_id)
-            current_gs.setdefault("user_task_cooldown", {})[username] = time.time() + TASK_COOLDOWN_SECS
             save_gs(current_gs)
-            st.success("Correct answer. AP awarded. Cooldown applied.")
+            st.success("Correct answer. AP awarded.")
             st.rerun()
         else:
-            current_gs.setdefault("user_task_cooldown", {})[username] = time.time() + TASK_COOLDOWN_SECS
-            save_gs(current_gs)
-            push_ev("TASK", f"Wrong answer on {task_id} by {username}. Cooldown triggered.", team)
-            st.error(f"Wrong answer. Cooldown applied for {TASK_COOLDOWN_SECS // 60} minutes.")
+            st.error("Wrong answer.")
+            push_ev("TASK", f"Wrong answer on {task_id} by {username}.", team)
             st.rerun()
 
 
@@ -223,46 +204,6 @@ def _mount_live_timer_sync(epoch_end_iso: str, epoch_duration_secs: int):
     )
 
 
-def _mount_cooldown_timer_sync(cooldown_end_ts: float):
-    """Update cooldown timer in browser every 500ms (independent from page rerun)."""
-    if cooldown_end_ts <= 0:
-        return  # No cooldown, don't mount timer
-
-    components.html(
-        f"""
-        <script>
-            const COOLDOWN_END_MS = {int(cooldown_end_ts * 1000)};
-            const parentWin = window.parent;
-            const doc = parentWin.document;
-
-            function tickCooldown() {{
-                const cdEl = doc.getElementById('ot-cooldown-timer');
-                if (!cdEl) return;
-
-                const rem = Math.max(0, Math.floor((COOLDOWN_END_MS - Date.now()) / 1000));
-                if (rem <= 0) {{
-                    cdEl.style.display = 'none';
-                    return;
-                }}
-
-                const mm = String(Math.floor(rem / 60)).padStart(2, '0');
-                const ss = String(rem % 60).padStart(2, '0');
-                cdEl.textContent = `⏳ ${{mm}}:${{ss}}`;
-                cdEl.style.opacity = '1';
-                cdEl.style.display = 'block';
-            }}
-
-            if (parentWin.__cdClockInterval) {{
-                clearInterval(parentWin.__cdClockInterval);
-            }}
-            tickCooldown();
-            parentWin.__cdClockInterval = setInterval(tickCooldown, 500);
-        </script>
-        """,
-        height=0,
-    )
-
-
 def show_war_room():
     username = st.session_state.username
     user     = get_user(username)
@@ -271,7 +212,6 @@ def show_war_room():
 
     # ── SESSION DEFAULTS ─────────────────────────────────────
     if "active_tab" not in st.session_state: st.session_state.active_tab = "Home"
-    if "cooldown"   not in st.session_state: st.session_state.cooldown   = {}
     if "ws_log"     not in st.session_state: st.session_state.ws_log     = []
     if "code_outputs" not in st.session_state: st.session_state.code_outputs = {}
     if "bot_code"   not in st.session_state: 
@@ -288,16 +228,6 @@ def show_war_room():
         remaining = max(0.0, (epoch_end - datetime.utcnow()).total_seconds())
     except Exception:
         remaining = EPOCH_DURATION_SECS
-
-    # ── COOLDOWN TIMER (Independent refresh) ──
-    username = st.session_state.get("username")
-    user_cooldown_remaining = 0.0
-    if username:
-        user_cooldown_remaining = _user_task_cd_remaining(gs, username)
-    
-    # Separate autorefresh for cooldown: update frequently when active, sparse when idle
-    cooldown_check_interval = 500 if user_cooldown_remaining > 0 else 30000
-    st_autorefresh(interval=cooldown_check_interval, limit=None, key="ot_cooldown_check")
 
     # ── EPOCH STATE TRACKING (Rerun only when epoch changes) ──
     if "last_epoch_seen" not in st.session_state:
@@ -565,16 +495,10 @@ def show_war_room():
         <div class="ot-epoch-phase">{gs['phase']}</div>
     </div>
         <div class="ot-timer" id="ot-live-timer" style="color:{timer_color};opacity:0">--:--</div>
-        <div class="ot-timer" id="ot-cooldown-timer" style="color:#FF2244;opacity:0;display:none;margin-top:4px;font-size:0.85em">⏳ --:--</div>
 </div>
 <div class="ot-tbar"><div class="ot-tbar-fill" id="ot-live-bar" style="width:{pct_left*100:.1f}%"></div></div>
 """, unsafe_allow_html=True)
     _mount_live_timer_sync(gs["epoch_end"], EPOCH_DURATION_SECS)
-    
-    # Mount independent cooldown timer (DISABLED - causes interaction issues)
-    # cooldown_end_ts = gs.get("user_task_cooldown", {}).get(username, 0)
-    # if cooldown_end_ts > 0:
-    #     _mount_cooldown_timer_sync(float(cooldown_end_ts))
 
     # ── VICTORY CONDITION DISPLAY ────────────────────────────
     if gs.get("game_over"):
@@ -832,9 +756,6 @@ def show_war_room():
     # TASKS HUMAN
     # ─────────────────────────────────────────────────────────────
     elif active == "Tasks (Human)":
-        # Check cooldown for button disable logic
-        fresh_user_cd = _user_task_cd_remaining(gs, username)
-
         st.markdown('<div class="sec-lbl">🧠 HUMAN TASKS · ATTEMPT & SUBMIT</div>', unsafe_allow_html=True)
         tc_cols = st.columns(2, gap="small")
         for i, task in enumerate(TASKS["monarch"]):
@@ -853,11 +774,10 @@ def show_war_room():
                 </div>
                 """, unsafe_allow_html=True)
                 btn_cols = st.columns([1, 1] if task.get("link") else [1], gap="small")
-                attempt_disabled = solved or (fresh_user_cd > 0)
                 btn_label = "DONE" if solved else f"ATTEMPT +{task['pts']} AP"
                 
                 with btn_cols[0]:
-                    if attempt_disabled:
+                    if solved:
                         st.button(btn_label, key=f"attempt_{task['id']}", use_container_width=True, disabled=True)
                     else:
                         with st.popover(btn_label, key=f"attempt_popover_{task['id']}", use_container_width=True):
