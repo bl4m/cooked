@@ -966,24 +966,27 @@ def show_war_room():
             <div style="font-size:0.75rem;margin-bottom:10px;color:#aaa">Form a Non-Aggression Pact for strategic coordination.</div>
             <hr style="border-color:#00CC8844">
             """, unsafe_allow_html=True)
-            non_allies = [t for t in all_teams if t not in alliances]
-            t_ally = st.selectbox("Offer Alliance to:", ["--"] + non_allies, key="ally_sel", label_visibility="collapsed")
-            if st.button("SEND ALLIANCE REQUEST", use_container_width=True) and t_ally != "--":
-                if "alliance_reqs" not in gs:
-                    gs["alliance_reqs"] = {}
-                if t_ally not in gs["alliance_reqs"]:
-                    gs["alliance_reqs"][t_ally] = []
-                if MT not in gs["alliance_reqs"][t_ally]:
-                    gs["alliance_reqs"][t_ally].append(MT)
-                    save_gs(gs)
-                    push_ev("SYS", f"Team {MT} offered an alliance to {t_ally}.", MT)
-                    st.success("Request Sent!")
+            if alliances:
+                st.info(f"🤝 Currently allied with: **{alliances[0]}**")
+            else:
+                non_allies = [t for t in all_teams if t not in alliances]
+                t_ally = st.selectbox("Offer Alliance to:", ["--"] + non_allies, key="ally_sel", label_visibility="collapsed")
+                if st.button("SEND ALLIANCE REQUEST", use_container_width=True) and t_ally != "--":
+                    if "alliance_reqs" not in gs:
+                        gs["alliance_reqs"] = {}
+                    if t_ally not in gs["alliance_reqs"]:
+                        gs["alliance_reqs"][t_ally] = []
+                    if MT not in gs["alliance_reqs"][t_ally]:
+                        gs["alliance_reqs"][t_ally].append(MT)
+                        save_gs(gs)
+                        push_ev("SYS", f"Team {MT} offered an alliance to {t_ally}.", MT)
+                        st.success("Request Sent!")
 
             if ally_reqs:
                 st.markdown("<div style='margin-top:10px;font-size:0.8rem;color:#D4AF37'>PENDING REQUESTS</div>", unsafe_allow_html=True)
                 for req_team in ally_reqs:
                     if st.button(f"ACCEPT {req_team}", key=f"acc_{req_team}", use_container_width=True):
-                        # Make mutual
+                        # Make mutual - only one alliance at a time, replace existing
                         if "alliances" not in gs:
                             gs["alliances"] = {}
                         if MT not in gs["alliances"]:
@@ -991,8 +994,9 @@ def show_war_room():
                         if req_team not in gs["alliances"]:
                             gs["alliances"][req_team] = []
 
-                        gs["alliances"][MT].append(req_team)
-                        gs["alliances"][req_team].append(MT)
+                        # Replace existing alliance with new one
+                        gs["alliances"][MT] = [req_team]
+                        gs["alliances"][req_team] = [MT]
 
                         gs["alliance_reqs"][MT].remove(req_team)
                         save_gs(gs)
@@ -1011,8 +1015,8 @@ def show_war_room():
             if not alliances:
                 st.info("You have no alliances.")
             else:
-                t_bs = st.selectbox("Target Ally:", ["--"] + alliances, key="bs_sel", label_visibility="collapsed")
-                if st.button("QUEUE BACKSTAB", use_container_width=True) and t_bs != "--":
+                t_bs = alliances[0]  # Only one alliance
+                if st.button(f"QUEUE BACKSTAB vs {t_bs}", use_container_width=True):
                     if "queued_actions" not in gs:
                         gs["queued_actions"] = {}
                     gs["queued_actions"][MT] = {"action": "BACKSTAB", "target": t_bs}
@@ -1038,8 +1042,8 @@ def show_war_room():
             if not alliances:
                 st.info("You have no alliances.")
             else:
-                t_susp = st.selectbox("Suspect Ally:", ["--"] + alliances, key="susp_sel", label_visibility="collapsed")
-                if st.button("QUEUE SUSPICION", use_container_width=True) and t_susp != "--":
+                t_susp = alliances[0]  # Only one alliance
+                if st.button(f"QUEUE SUSPICION vs {t_susp}", use_container_width=True):
                     if "queued_actions" not in gs:
                         gs["queued_actions"] = {}
                     gs["queued_actions"][MT] = {"action": "SUSPICION", "target": t_susp}

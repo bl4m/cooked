@@ -85,6 +85,21 @@ def render_sidebar(gs, tc, dn, MT, my_hp, my_ap, my_terr,
         </div>
         """, unsafe_allow_html=True)
 
+        # ── Alliance Status ────────────────────────────────────
+        alliances = gs.get("alliances", {}).get(MT, [])
+        ally_color = TEAM_COLORS.get(alliances[0], {}).get("color", "#00CC88") if alliances else "#666666"
+        ally_icon = TEAM_COLORS.get(alliances[0], {}).get("icon", "·") if alliances else "·"
+        ally_text = f"{ally_icon} {alliances[0]}" if alliances else "NONE"
+        st.markdown(f"""
+        <div class="sb-section">
+            <div class="sb-title">ALLIANCE STATUS</div>
+            <div class="sb-row">
+                <span class="sb-lbl">ALLIED WITH</span>
+                <span class="sb-val" style="color:{ally_color}">{ally_text}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
         # ── Epoch ─────────────────────────────────────────────
         timer_color = "#FF2244" if mins_left < 3 else ("#FFB800" if mins_left < 7 else "#FFD700")
         st.markdown(f"""
