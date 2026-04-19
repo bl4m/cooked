@@ -23,6 +23,24 @@ from config import (
 from styles.theme import get_full_css
 
 
+# Cache data loads for 1.5 seconds to speed up UI interactions
+@st.cache_data(ttl=1.5)
+def _cached_load_gs():
+    return load_gs()
+
+@st.cache_data(ttl=1.5)
+def _cached_load_teams():
+    return load_teams()
+
+@st.cache_data(ttl=1.5)
+def _cached_load_evs(count=40):
+    return load_evs(count)
+
+@st.cache_data(ttl=1.5)
+def _cached_load_users():
+    return load_users()
+
+
 def _normalize_answer(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
@@ -219,9 +237,9 @@ def show_war_room():
         st.session_state.bot_code = "# Auto-Generated Standard Tactics\\n# Output format: ATTACK, <cell_index>\\nprint('DEFEND')"
 
     # ── LOAD DATA ────────────────────────────────────────────
-    gs    = load_gs()
-    evs   = load_evs(40)
-    teams = load_teams()
+    gs    = _cached_load_gs()
+    evs   = _cached_load_evs(40)
+    teams = _cached_load_teams()
     tc    = terr_count(gs["grid"], list(teams.keys()))
 
     try:
@@ -398,7 +416,7 @@ def show_war_room():
 
         my_meta = teams.get(MT, {})
         members = my_meta.get("members", [username])
-        all_users = load_users()
+        all_users = _cached_load_users()
         member_names = [all_users.get(m, {}).get("display_name", m) for m in members]
         pills = "".join(f'<span class="member-pill">{n}</span>' for n in member_names)
         st.markdown(f'<div class="sb-section"><div class="sb-title">TEAM ROSTER</div>{pills}</div>', unsafe_allow_html=True)

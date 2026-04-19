@@ -56,12 +56,9 @@ class InMemoryStore:
 
 class SupabaseStore:
 	def __init__(self, url: str, key: str, table: str = "ot_store"):
-		import httpx
 		from supabase import create_client
 
-		# Create httpx client with explicit timeout (10 seconds)
-		http_client = httpx.Client(timeout=10.0)
-		self.client = create_client(url, key, http_client=http_client)
+		self.client = create_client(url, key)
 		self.table = table
 		self._max_retries = 2
 		self._retry_delay = 0.5  # seconds
