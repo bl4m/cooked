@@ -223,6 +223,46 @@ def _mount_live_timer_sync(epoch_end_iso: str, epoch_duration_secs: int):
     )
 
 
+def _mount_cooldown_timer_sync(cooldown_end_ts: float):
+    """Update cooldown timer in browser every 500ms (independent from page rerun)."""
+    if cooldown_end_ts <= 0:
+        return  # No cooldown, don't mount timer
+
+    components.html(
+        f"""
+        <script>
+            const COOLDOWN_END_MS = {int(cooldown_end_ts * 1000)};
+            const parentWin = window.parent;
+            const doc = parentWin.document;
+
+            function tickCooldown() {{
+                const cdEl = doc.getElementById('ot-cooldown-timer');
+                if (!cdEl) return;
+
+                const rem = Math.max(0, Math.floor((COOLDOWN_END_MS - Date.now()) / 1000));
+                if (rem <= 0) {{
+                    cdEl.style.display = 'none';
+                    return;
+                }}
+
+                const mm = String(Math.floor(rem / 60)).padStart(2, '0');
+                const ss = String(rem % 60).padStart(2, '0');
+                cdEl.textContent = `⏳ ${{mm}}:${{ss}}`;
+                cdEl.style.opacity = '1';
+                cdEl.style.display = 'block';
+            }}
+
+            if (parentWin.__cdClockInterval) {{
+                clearInterval(parentWin.__cdClockInterval);
+            }}
+            tickCooldown();
+            parentWin.__cdClockInterval = setInterval(tickCooldown, 500);
+        </script>
+        """,
+        height=0,
+    )
+
+
 def show_war_room():
     username = st.session_state.username
     user     = get_user(username)
@@ -525,10 +565,16 @@ def show_war_room():
         <div class="ot-epoch-phase">{gs['phase']}</div>
     </div>
         <div class="ot-timer" id="ot-live-timer" style="color:{timer_color};opacity:0">--:--</div>
+        <div class="ot-timer" id="ot-cooldown-timer" style="color:#FF2244;opacity:0;display:none;margin-top:4px;font-size:0.85em">⏳ --:--</div>
 </div>
 <div class="ot-tbar"><div class="ot-tbar-fill" id="ot-live-bar" style="width:{pct_left*100:.1f}%"></div></div>
 """, unsafe_allow_html=True)
     _mount_live_timer_sync(gs["epoch_end"], EPOCH_DURATION_SECS)
+    
+    # Mount independent cooldown timer
+    cooldown_end_ts = gs.get("user_task_cooldown", {}).get(username, 0)
+    if cooldown_end_ts > 0:
+        _mount_cooldown_timer_sync(float(cooldown_end_ts))
 
     # ── VICTORY CONDITION DISPLAY ────────────────────────────
     if gs.get("game_over"):
@@ -786,13 +832,8 @@ def show_war_room():
     # TASKS HUMAN
     # ─────────────────────────────────────────────────────────────
     elif active == "Tasks (Human)":
-        # Recalculate fresh cooldown for this render (independent timer)
+        # Check cooldown for button disable logic
         fresh_user_cd = _user_task_cd_remaining(gs, username)
-        if fresh_user_cd > 0:
-            st.markdown(
-                f'<div class="cd-bar">⏳ COOLDOWN — {int(fresh_user_cd//60):02d}:{int(fresh_user_cd%60):02d} remaining</div>',
-                unsafe_allow_html=True,
-            )
 
         st.markdown('<div class="sec-lbl">🧠 HUMAN TASKS · ATTEMPT & SUBMIT</div>', unsafe_allow_html=True)
         tc_cols = st.columns(2, gap="small")
