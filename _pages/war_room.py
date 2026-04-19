@@ -239,9 +239,10 @@ def show_war_room():
     if current_epoch > st.session_state.last_epoch_seen:
         st.session_state.last_epoch_seen = current_epoch
 
-    # Minimal background check for epoch rollover (~every 30s, user won't see flicker)
-    # This ensures epoch logic triggers even if user is idle. Client-side JS handles smooth timer updates.
-    st_autorefresh(interval=30000, limit=None, key="ot_epoch_check")
+    # Smart background check: frequent near epoch end, sparse otherwise
+    # Prevents 5-8s delay when timer hits 0
+    check_interval = 5000 if remaining <= 10 else 30000
+    st_autorefresh(interval=check_interval, limit=None, key="ot_epoch_check")
 
     if "queued_attacks" not in gs: gs["queued_attacks"] = []
     if "shadow_task_ap" not in gs: gs["shadow_task_ap"] = {}
