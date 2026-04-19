@@ -5,7 +5,6 @@ Neon UI + Grid Map + Automated Attack Bot Execution
 
 import json
 import time
-import random
 from datetime import datetime, timedelta
 import streamlit as st
 import streamlit.components.v1 as components
@@ -18,7 +17,7 @@ from db import (
 from config import (
     TASKS, DIFF_COLOR, EVENT_COLORS, STARTING_HP, STARTING_AP,
     EPOCH_DURATION_SECS, ATTACK_COST_AP, CELL_COLORS, CELL_GLOW,
-    TERRAIN_SPECIAL, get_amoeba_adjacency, TASK_COOLDOWN_SECS,
+    TERRAIN_SPECIAL, TASK_COOLDOWN_SECS,
     MONARCH_TASK_PORTAL
 )
 from styles.theme import get_full_css
@@ -160,89 +159,47 @@ def _task_attempt_panel(task: dict, team: str, username: str):
             st.rerun()
 
 
-def execute_bot(code_str, MT, target_gs, teams_dict):
-    """Sandbox evaluates user heuristic code against valid target metadata."""
-    alliances = target_gs.get("alliances", {}).get(MT, [])
-    grid = target_gs["grid"]
-    adj = get_amoeba_adjacency(len(grid))
-    
-    my_cells = [i for i, owner in enumerate(grid) if owner == MT]
-    valid_targets = set()
-    for c in my_cells:
-        for n in adj.get(c, []):
-            owner = grid[n]
-            if owner != MT and owner not in alliances:
-                valid_targets.add(n)
-                
-    targets_data = []
-    for c in valid_targets:
-        owner = grid[c]
-        targets_data.append({
-            "_id": int(c),
-            "is_empty": owner == "",
-            "owner": owner,
-            "owner_hp": int(target_gs["hp"].get(owner, 0)) if owner else 0,
-            "owner_ap": int(target_gs["ap"].get(owner, 0)) if owner else 0,
-            "owner_territory": sum(1 for x in grid if x == owner) if owner else 0
-        })
-
-    import json
-    t_str = json.dumps(targets_data)
-    
-    injected_code = f"""
-TARGETS = {t_str}
-{code_str}
-
-best_score = -999999
-best_id = None
-try:
-    for t in TARGETS:
-        s = evaluate_target(t)
-        if s is not None and s > best_score:
-            best_score = s
-            best_id = t['_id']
-except Exception as e:
-    pass
-
-if best_id is not None:
-    print(f"__SYS_BOT_MOVE__ {{best_id}}")
-"""
-    stdout, stderr = run_code_safe(injected_code, timeout=2)
-    return stdout.strip(), stderr.strip()
-
-
-def _render_live_timer(epoch_end_iso: str, timer_color: str):
-    """Client-side countdown so the timer remains smooth without full Streamlit reruns."""
-    try:
-        end_ms = int(datetime.fromisoformat(epoch_end_iso).timestamp() * 1000)
-    except Exception:
-        end_ms = int((datetime.utcnow() + timedelta(seconds=EPOCH_DURATION_SECS)).timestamp() * 1000)
+def _mount_live_timer_sync(epoch_end_iso: str, epoch_duration_secs: int):
+    """Update only header timer/progress in the browser every second (no full rerun)."""
+    end_iso_js = (epoch_end_iso or "").strip()
 
     components.html(
         f"""
-        <div id="ot-live-timer" style="
-            font-family:'Orbitron',monospace;
-            color:{timer_color};
-            font-size:1.15rem;
-            letter-spacing:2px;
-            text-align:right;
-            padding:0 4px;
-        ">00:00</div>
         <script>
-            const endMs = {end_ms};
-            const el = document.getElementById('ot-live-timer');
+            const END_ISO = {json.dumps(end_iso_js)};
+            const EPOCH_SECS = {epoch_duration_secs};
+            let END_MS = Date.parse(END_ISO.endsWith('Z') ? END_ISO : (END_ISO + 'Z'));
+            if (Number.isNaN(END_MS)) {{
+                END_MS = Date.now() + (EPOCH_SECS * 1000);
+            }}
+
+            const parentWin = window.parent;
+            const doc = parentWin.document;
+
             function tick() {{
-                const now = Date.now();
-                const remaining = Math.max(0, Math.floor((endMs - now) / 1000));
-                const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
-                const ss = String(remaining % 60).padStart(2, '0');
-                el.textContent = `${{mm}}:${{ss}}`;
+                const timerEl = doc.getElementById('ot-live-timer');
+                const barEl = doc.getElementById('ot-live-bar');
+                if (!timerEl || !barEl) return;
+
+                const rem = Math.max(0, Math.floor((END_MS - Date.now()) / 1000));
+                const mm = String(Math.floor(rem / 60)).padStart(2, '0');
+                const ss = String(rem % 60).padStart(2, '0');
+                timerEl.textContent = `${{mm}}:${{ss}}`;
+
+                const pct = Math.max(0, Math.min(100, (rem / EPOCH_SECS) * 100));
+                barEl.style.width = `${{pct.toFixed(1)}}%`;
+
+                timerEl.style.color = rem <= 60 ? '#FF2244' : '#FFD700';
+            }}
+
+            if (parentWin.__otClockInterval) {{
+                clearInterval(parentWin.__otClockInterval);
             }}
             tick();
-            setInterval(tick, 1000);
+            parentWin.__otClockInterval = setInterval(tick, 1000);
         </script>
         """,
-        height=34,
+        height=0,
     )
 
 
@@ -272,17 +229,16 @@ def show_war_room():
     except Exception:
         remaining = EPOCH_DURATION_SECS
 
-    # ── Adaptive Auto-Refresh (reduce lag during normal play) ─
-    # Keep UI mostly static; only poll fast near epoch rollover.
-    if remaining <= 45:
+    # Adaptive reruns keep game state/current warnings fresh while limiting flicker.
+    if remaining <= 10:
         refresh_ms = 2000
-    elif remaining <= 180:
-        refresh_ms = 8000
+    elif remaining <= 60:
+        refresh_ms = 4000
     else:
-        refresh_ms = 20000 if redis_live else 12000
+        refresh_ms = 12000
     st_autorefresh(interval=refresh_ms, limit=None, key="ot_refresh")
 
-    if "bypassed" not in gs: gs["bypassed"] = {}
+    if "queued_attacks" not in gs: gs["queued_attacks"] = []
     if "shadow_task_ap" not in gs: gs["shadow_task_ap"] = {}
     
     # Check if epoch rolled over
@@ -290,12 +246,10 @@ def show_war_room():
         # Trigger epoch switch
         gs["epoch"] += 1
         gs["epoch_end"] = (datetime.utcnow() + timedelta(seconds=EPOCH_DURATION_SECS)).isoformat()
-        bypassed_teams = gs["bypassed"]
-        gs["bypassed"] = {} # clear for next epoch
-        if "bots" not in gs: gs["bots"] = {}
-        
         queued = gs.get("queued_actions", {})
         gs["queued_actions"] = {}
+        queued_attacks = gs.get("queued_attacks", [])
+        gs["queued_attacks"] = []
         blocked_backstabbers = set()
         
         # 1. Resolve Suspicions
@@ -329,28 +283,37 @@ def show_war_room():
                     gs["hp"][target] = max(0, int(gs["hp"][target]) - damage)
                     push_ev("ATTACK", f"BETRAYAL! {actor} backstabbed {target} for {damage} HP damage!", actor)
         
-        # 3. Execute Bot for every active team
-        for tname, bcode in gs["bots"].items():
-            if tname not in bypassed_teams:
-                # skip dead teams
-                if gs["hp"].get(tname, 0) <= 0: continue
-                stdout, err = execute_bot(bcode, tname, gs, teams)
-                if "__SYS_BOT_MOVE__" in stdout:
-                    try:
-                        # Extract the exact ID immediately following the secure token
-                        token_part = stdout.split("__SYS_BOT_MOVE__")[1].strip()
-                        cell_idx = int(token_part.split()[0])
-                        ap = int(gs["ap"].get(tname, 0))
-                        if ap >= ATTACK_COST_AP and gs["grid"][cell_idx] != tname:
-                            prev = gs["grid"][cell_idx]
-                            gs["grid"][cell_idx] = tname
-                            gs["ap"][tname] -= ATTACK_COST_AP
-                            if prev and prev in gs["hp"]:
-                                gs["hp"][prev] = max(0, int(gs["hp"][prev]) - 100)
-                            push_ev("ATTACK", f"BOT ({tname}) captured cell {cell_idx}!", tname)
-                    except:
-                        push_ev("SYS", f"BOT ({tname}) execution failed to parse attack move", tname)
-                        
+        # 3. Resolve queued human attacks in submission order.
+        for attack in queued_attacks:
+            actor = attack.get("actor")
+            target = attack.get("target")
+            requested_hits = int(attack.get("hits", 1) or 1)
+
+            if not actor or not target or actor == target:
+                continue
+            if int(gs["hp"].get(actor, 0)) <= 0:
+                push_ev("SYS", f"Queued attack skipped: {actor} is eliminated.", actor)
+                continue
+            if int(gs["hp"].get(target, 0)) <= 0:
+                push_ev("SYS", f"Queued attack skipped: target {target} is already eliminated.", actor)
+                continue
+
+            ap_available = int(gs["ap"].get(actor, 0))
+            max_hits = ap_available // ATTACK_COST_AP
+            executed_hits = min(requested_hits, max_hits)
+            if executed_hits <= 0:
+                push_ev("SYS", f"Queued attack failed: {actor} has insufficient AP.", actor)
+                continue
+
+            damage = executed_hits * 100
+            gs["ap"][actor] = ap_available - (executed_hits * ATTACK_COST_AP)
+            gs["hp"][target] = max(0, int(gs["hp"].get(target, 0)) - damage)
+            push_ev(
+                "ATTACK",
+                f"EPOCH STRIKE: {actor} executed {executed_hits}/{requested_hits} hits on {target} (-{damage} HP, -{executed_hits * ATTACK_COST_AP} AP).",
+                actor,
+            )
+
         # 4. Clean up eliminated map territories
         for t, hp in list(gs["hp"].items()):
             if hp <= 0:
@@ -380,6 +343,34 @@ def show_war_room():
 
     # ── STYLES ───────────────────────────────────────────────
     st.markdown(get_full_css(), unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {
+            display: block !important;
+            visibility: visible !important;
+            transform: translateX(0%) !important;
+            min-width: 320px !important;
+            max-width: 320px !important;
+        }
+        [data-testid="collapsedControl"] { display: block !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    components.html(
+        """
+        <script>
+            const doc = window.parent.document;
+            const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+            const toggleBtn = doc.querySelector('[data-testid="collapsedControl"] button');
+            if (sidebar && sidebar.getAttribute('aria-expanded') === 'false' && toggleBtn) {
+                toggleBtn.click();
+            }
+        </script>
+        """,
+        height=0,
+    )
 
 
     # ── SIDEBAR ───────────────────────────────────────────────
@@ -464,11 +455,11 @@ def show_war_room():
         <div class="ot-epoch-num">EPOCH {gs['epoch']}</div>
         <div class="ot-epoch-phase">{gs['phase']}</div>
     </div>
-    <div class="ot-timer" style="color:{timer_color}">{mins_left:02d}:{secs_left:02d}</div>
+    <div class="ot-timer" id="ot-live-timer" style="color:{timer_color}">{mins_left:02d}:{secs_left:02d}</div>
 </div>
-<div class="ot-tbar"><div class="ot-tbar-fill" style="width:{pct_left*100:.1f}%"></div></div>
+<div class="ot-tbar"><div class="ot-tbar-fill" id="ot-live-bar" style="width:{pct_left*100:.1f}%"></div></div>
 """, unsafe_allow_html=True)
-    _render_live_timer(gs["epoch_end"], timer_color)
+    _mount_live_timer_sync(gs["epoch_end"], EPOCH_DURATION_SECS)
 
     # ── VICTORY CONDITION DISPLAY ────────────────────────────
     if gs.get("game_over"):
@@ -483,134 +474,8 @@ def show_war_room():
         """, unsafe_allow_html=True)
         return  # Halt loading normal dashboard
         
-    # ── 1-MINUTE POPUP BOT WARNING ───────────────────────────
-    if remaining <= 60 and MT not in gs.get("bypassed", {}) and gs["hp"].get(MT, 0) > 0:
-        db_code = gs.get("bots", {}).get(MT, "# Auto-Generated\\nprint('DEFEND')")
-        stdout, err = execute_bot(db_code, MT, gs, teams)
-        plan_msg = stdout if stdout else "(No Output / Formatting Error)"
-        if "__SYS_BOT_MOVE__" in plan_msg:
-            try:
-                cell_id = plan_msg.split("__SYS_BOT_MOVE__")[1].strip().split()[0]
-                plan_msg = f"ATTACK CELL {cell_id}"
-            except: pass
-        st.markdown(f"""
-        <div class="warning-popup">
-            <h3 style="font-family:'Orbitron',monospace;color:#FF2244;margin:0 0 10px 0;letter-spacing:4px">⚠️ IMMINENT BOT EXECUTION</h3>
-            <div style="font-family:'Share Tech Mono',monospace;color:#dde0ee;font-size:1rem;margin-bottom:15px">
-                Epoch concludes in {int(remaining)}s. Your bot evaluated the targets:<br>
-                <strong style="color:#00E5FF;font-size:1.2rem;display:block;margin-top:10px">{plan_msg}</strong>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        col1, col2, col3 = st.columns([1,2,1])
-        with col2:
-            if st.button("🃏 PLAY ATTACK CARD (Bypass Bot) -150 AP", use_container_width=True):
-                # Apply penalty
-                if "bypassed" not in gs:
-                    gs["bypassed"] = {}
-                gs["ap"][MT] = max(0, int(gs["ap"].get(MT, 0)) - 150)
-                gs["bypassed"][MT] = True
-                save_gs(gs)
-                push_ev("SYS", f"Team {MT} utilized manual override override (-150 AP)", MT)
-                st.rerun()
-
-    if "bypassed" not in gs:
-        gs["bypassed"] = {}
-        
-    if gs.get("bypassed", {}).get(MT) and gs["hp"].get(MT, 0) > 0:
-        st.info("You have bypassed the automated bot phase. Your bot is frozen for this epoch. You may attack manually.")
-        
-        # Get valid adjacent cells to attack
-        adj = get_amoeba_adjacency(len(gs["grid"]))
-        my_cells = [i for i, owner in enumerate(gs["grid"]) if owner == MT]
-        
-        # If team has no cells, offer to claim a starter cell first
-        if not my_cells:
-            st.warning("⚠️ Your team has no territory yet!")
-            empty_cells = [i for i, owner in enumerate(gs["grid"]) if not owner]
-            if empty_cells:
-                st.markdown("### Claim Your First Cell")
-                cell_choice = st.select_slider("Pick a free cell:", options=empty_cells, value=empty_cells[0])
-                if st.button("📍 CLAIM THIS CELL", use_container_width=True):
-                    gs["grid"][cell_choice] = MT
-                    push_ev("SYS", f"Team {MT} claimed starter cell {cell_choice}", MT)
-                    save_gs(gs)
-                    st.success(f"✓ Claimed cell {cell_choice}!")
-                    st.rerun()
-            else:
-                st.error("❌ No free cells available on the map!")
-            st.stop()
-        
-        # Quick attack UI
-        st.markdown('<div style="margin:12px 0; padding:12px; border-left:3px solid #FF2244; background:rgba(255,34,68,0.08)"><b>⚡ MANUAL ATTACK</b></div>', unsafe_allow_html=True)
-        
-        valid_targets_set = set()
-        for c in my_cells:
-            valid_targets_set.update(adj.get(c, []))
-        valid_targets_set = {t for t in valid_targets_set if gs["grid"][t] != MT}
-        
-        # Build a map of target_cell -> team_id
-        cell_to_team = {}
-        for cell_idx in valid_targets_set:
-            owner = gs["grid"][cell_idx]
-            if owner:
-                if owner not in cell_to_team:
-                    cell_to_team[owner] = []
-                cell_to_team[owner].append(cell_idx)
-        
-        if not cell_to_team:
-            st.warning("No valid targets. Expand your territory first.")
-        else:
-            # Show team options
-            team_options = []
-            for team_id in sorted(cell_to_team.keys()):
-                team_info = teams.get(team_id, {})
-                hp_val = gs["hp"].get(team_id, 0)
-                cells_count = len(cell_to_team[team_id])
-                label = f"{team_info.get('name', team_id)} (HP: {hp_val} | {cells_count} adjacent cells)"
-                team_options.append((team_id, label))
-            
-            selected_team_label = st.selectbox(
-                "Select team to attack:",
-                [opt[1] for opt in team_options],
-                key="manual_attack_team_select",
-                label_visibility="collapsed"
-            )
-            selected_team_id = team_options[[opt[1] for opt in team_options].index(selected_team_label)][0]
-            
-            # Show cells of that team
-            target_cells = cell_to_team[selected_team_id]
-            cell_labels = [f"Cell {c}" for c in target_cells]
-            selected_cell_label = st.selectbox(
-                "Select cell to attack:",
-                cell_labels,
-                key="manual_attack_cell_select",
-                label_visibility="collapsed"
-            )
-            selected_cell_idx = target_cells[cell_labels.index(selected_cell_label)]
-            
-            col_atk, col_cancel = st.columns(2)
-            with col_atk:
-                if st.button("🗡️ EXECUTE ATTACK", use_container_width=True):
-                    ap = int(gs["ap"].get(MT, 0))
-                    if ap >= ATTACK_COST_AP:
-                        gs["grid"][selected_cell_idx] = MT
-                        gs["ap"][MT] -= ATTACK_COST_AP
-                        push_ev("ATTACK", f"Team {MT} manually attacked cell {selected_cell_idx} from {selected_team_id} (-{ATTACK_COST_AP} AP)", MT)
-                        save_gs(gs)
-                        st.success(f"✓ Captured cell {selected_cell_idx}!")
-                        st.rerun()
-                    else:
-                        st.error(f"Not enough AP! Need {ATTACK_COST_AP}, have {ap}")
-            with col_cancel:
-                if st.button("✕ Cancel", use_container_width=True):
-                    gs["bypassed"][MT] = False
-                    save_gs(gs)
-                    st.info("Attack bypassed mode deactivated.")
-                    st.rerun()
-
     # ── MAIN TABS ────────────────────────────────────────────
-    tab_names = ["Home", "Tasks Human", "Tasks (Bot)", "Attack Decision Bot", "Strategy Deck"]
+    tab_names = ["Home", "Tasks Human", "Tasks (Bot)", "Strategy Deck"]
     tab_cols  = st.columns(len(tab_names), gap="small")
     for i, tname in enumerate(tab_names):
         with tab_cols[i]:
@@ -942,89 +807,6 @@ def show_war_room():
             st.markdown(out_html, unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────
-    # ATTACK DECISION BOT
-    # ─────────────────────────────────────────────────────────────
-    elif active == "Attack Decision Bot":
-        st.markdown('<div class="sec-lbl">⚙️ AUTOMATION LOGIC · HEURISTICS ENGINE</div>', unsafe_allow_html=True)
-        st.markdown("""
-        <div style="background:rgba(212,175,55,0.06);border-left:2px solid #D4AF37;border-radius:2px;padding:8px 12px;margin-bottom:12px;font-family:'Share Tech Mono',monospace;font-size:0.75rem;color:#dde0ee;line-height:1.5;">
-            Configure the logic your bot executes at the end of every epoch (5 min).<br>
-            The backend engine passes an anonymized <code>target</code> dict to your <code>evaluate_target(target)</code> function.<br>
-            Your script must return an integer score. The engine attacks the target with the highest score.
-        </div>
-        """, unsafe_allow_html=True)
-        
-        if "bots" not in gs: gs["bots"] = {}
-        default_bot = '''def evaluate_target(target):
-    """
-    target dictionary looks like:
-    {
-      "is_empty": boolwhole code base acccordingly
-      ,
-      "owner": str,
-      "owner_hp": int,
-      "owner_ap": int,
-      "owner_territory": int
-    }
-    """
-    score = 0
-    if target["is_empty"]:
-        score += 50
-    elif target["owner_hp"] < 2000:
-        score += 100
-        
-    return score
-'''
-        db_code = gs["bots"].get(MT, default_bot)
-        
-        c_code = st.text_area("Bot Code", value=db_code, height=280, key="decision_bot_editor", label_visibility="collapsed")
-        
-        if c_code != db_code:
-            gs["bots"][MT] = c_code
-            save_gs(gs)
-        
-        col_test, col_man = st.columns(2)
-        with col_test:
-            if st.button("🧪 DRY RUN LOGIC", use_container_width=True):
-                sout, serr = execute_bot(c_code, MT, gs, teams)
-                if serr:
-                    st.error(f"Logic Error: {serr}")
-                else:
-                    if "__SYS_BOT_MOVE__" in sout:
-                        try:
-                            tid = sout.split("__SYS_BOT_MOVE__")[1].strip().split()[0]
-                            st.success(f"✔️ Valid Attack Target Evaluated: Cell {tid}")
-                        except:
-                            st.warning("⚠️ Invalid return target formatting.")
-                    else:
-                        st.info(f"Bot Output: {sout or 'None'}")
-        
-        with col_man:
-            if gs.get("bypassed", {}).get(MT):
-                st.markdown("<div style='text-align:center;padding:5px;font-family:Share Tech Mono;color:#00E5FF'>Bypass Active — Manual Mode Unlocked</div>", unsafe_allow_html=True)
-                target_cell = st.number_input("Target Cell (0-29)", 0, 29, 0)
-                if st.button("🗡️ LAUNCH MANUAL ATTACK", use_container_width=True):
-                    ap = int(gs["ap"].get(MT, 0))
-                    
-                    adj = get_amoeba_adjacency(len(gs["grid"]))
-                    my_cells = [i for i, owner in enumerate(gs["grid"]) if owner == MT]
-                    valid_targets = set()
-                    for c in my_cells:
-                        valid_targets.update(adj.get(c, []))
-                        
-                    if ap >= ATTACK_COST_AP and target_cell in valid_targets and gs["grid"][target_cell] != MT:
-                        prev = gs["grid"][target_cell]
-                        gs["grid"][target_cell] = MT
-                        gs["ap"][MT] -= ATTACK_COST_AP
-                        if prev and prev in gs["hp"]:
-                            gs["hp"][prev] = max(0, int(gs["hp"][prev]) - 100)
-                        save_gs(gs)
-                        push_ev("ATTACK", f"MANUAL ({MT}) captured cell {target_cell}!", MT)
-                        st.success(f"Captured {target_cell}!")
-                    else:
-                        st.error("Invalid Target or Insufficient AP.")
-
-    # ─────────────────────────────────────────────────────────────
     # STRATEGY DECK
     # ─────────────────────────────────────────────────────────────
     elif active == "Strategy Deck":
@@ -1035,6 +817,7 @@ def show_war_room():
         ally_reqs = gs.get("alliance_reqs", {}).get(MT, [])
         queued_actions = gs.get("queued_actions", {})
         my_queued = queued_actions.get(MT, None)
+        my_attack_queue = [a for a in gs.get("queued_attacks", []) if a.get("actor") == MT]
 
         c1, c2, c3 = st.columns(3)
 
@@ -1043,7 +826,7 @@ def show_war_room():
             st.markdown("""
             <div style="background:rgba(0, 204, 136, 0.05);border-top:2px solid #00CC88;padding:10px;height:100%">
             <h4 style="color:#00CC88;margin:0 0 10px 0;font-family:Orbitron">HANDSHAKE</h4>
-            <div style="font-size:0.75rem;margin-bottom:10px;color:#aaa">Form a Non-Aggression Pact. Bots will ignore allied cells.</div>
+            <div style="font-size:0.75rem;margin-bottom:10px;color:#aaa">Form a Non-Aggression Pact for strategic coordination.</div>
             <hr style="border-color:#00CC8844">
             """, unsafe_allow_html=True)
             non_allies = [t for t in all_teams if t not in alliances]
@@ -1133,4 +916,70 @@ def show_war_room():
                     save_gs(gs)
                     st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-lbl">⚔️ ATTACK QUEUE · EXECUTES AT EPOCH END</div>', unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='font-size:0.76rem;color:#aaa;margin-bottom:10px'>"
+            f"Cost per hit: <b style='color:#00E5FF'>{ATTACK_COST_AP} AP</b> · "
+            f"Damage per hit: <b style='color:#FF2244'>100 HP</b>. "
+            f"Queue attacks in order. Execution is sequential at epoch rollover.</div>",
+            unsafe_allow_html=True,
+        )
+
+        atk_col1, atk_col2, atk_col3 = st.columns([2, 1, 1], gap="small")
+        with atk_col1:
+            alive_targets = [t for t in all_teams if int(gs["hp"].get(t, 0)) > 0]
+            target_team = st.selectbox("Target Team", alive_targets or ["--"], key="q_attack_target")
+        with atk_col2:
+            desired_hits = st.number_input("Hits", min_value=1, max_value=100, value=1, step=1, key="q_attack_hits")
+        with atk_col3:
+            st.markdown("<div style='height:26px'></div>", unsafe_allow_html=True)
+            if st.button("QUEUE ATTACK", use_container_width=True, disabled=not alive_targets):
+                gs.setdefault("queued_attacks", []).append(
+                    {
+                        "actor": MT,
+                        "target": target_team,
+                        "hits": int(desired_hits),
+                        "created": datetime.utcnow().isoformat(),
+                    }
+                )
+                save_gs(gs)
+                push_ev("SYS", f"{MT} queued {int(desired_hits)} hit(s) on {target_team} for epoch end.", MT)
+                st.rerun()
+
+        if my_attack_queue:
+            st.markdown("<div style='font-size:0.8rem;color:#D4AF37;margin-top:8px'>YOUR QUEUED ATTACKS (IN ORDER)</div>", unsafe_allow_html=True)
+            queued_cost = 0
+            for idx, attack in enumerate(my_attack_queue, start=1):
+                hits = int(attack.get("hits", 1) or 1)
+                queued_cost += hits * ATTACK_COST_AP
+                target = attack.get("target", "?")
+                c_a, c_b = st.columns([4, 1], gap="small")
+                with c_a:
+                    st.markdown(
+                        f"<div class='elim-row'><span>#{idx} → {target}</span>"
+                        f"<span style='color:#00E5FF'>{hits} hit(s) · {hits * ATTACK_COST_AP} AP</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                with c_b:
+                    if st.button("Remove", key=f"rm_qatk_{idx}", use_container_width=True):
+                        queue = gs.get("queued_attacks", [])
+                        removed = False
+                        next_queue = []
+                        for item in queue:
+                            if not removed and item.get("actor") == MT and item.get("target") == target and int(item.get("hits", 1) or 1) == hits:
+                                removed = True
+                                continue
+                            next_queue.append(item)
+                        gs["queued_attacks"] = next_queue
+                        save_gs(gs)
+                        st.rerun()
+            ap_now = int(gs["ap"].get(MT, 0))
+            st.markdown(
+                f"<div style='font-size:0.75rem;color:#aaa;margin-top:6px'>"
+                f"Queued AP demand: <b style='color:#00E5FF'>{queued_cost}</b> · Current AP: <b style='color:#00E5FF'>{ap_now}</b>."
+                f" Extra hits auto-skip at epoch end if AP is insufficient.</div>",
+                unsafe_allow_html=True,
+            )
 

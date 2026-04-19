@@ -56,58 +56,118 @@ class InMemoryStore:
 
 class SupabaseStore:
 	def __init__(self, url: str, key: str, table: str = "ot_store"):
+		import httpx
 		from supabase import create_client
 
-		self.client = create_client(url, key)
+		# Create httpx client with explicit timeout (10 seconds)
+		http_client = httpx.Client(timeout=10.0)
+		self.client = create_client(url, key, http_client=http_client)
 		self.table = table
+		self._max_retries = 2
+		self._retry_delay = 0.5  # seconds
+
+	def _retry_operation(self, operation_func, operation_name="operation"):
+		"""Execute operation with retry logic."""
+		import time
+		last_error = None
+		for attempt in range(self._max_retries + 1):
+			try:
+				return operation_func()
+			except Exception as e:
+				last_error = e
+				if attempt < self._max_retries:
+					wait_time = self._retry_delay * (2 ** attempt)
+					_LOG.warning(f"[DB] {operation_name} failed (attempt {attempt + 1}), retrying in {wait_time}s: {str(e)[:100]}")
+					time.sleep(wait_time)
+				else:
+					_LOG.error(f"[DB] {operation_name} failed after {self._max_retries + 1} attempts: {str(e)[:100]}")
+		raise last_error
 
 	def _select_row(self, key: str):
-		return (
-			self.client.table(self.table)
-			.select("key,value")
-			.eq("key", key)
-			.limit(1)
-			.execute()
-		)
+		def _query():
+			return (
+				self.client.table(self.table)
+				.select("key,value")
+				.eq("key", key)
+				.limit(1)
+				.execute()
+			)
+		return self._retry_operation(_query, f"SELECT {key}")
 
 	def get(self, key):
-		res = self._select_row(key)
-		data = res.data or []
-		if not data:
+		try:
+			res = self._select_row(key)
+			data = res.data or []
+			if not data:
+				return None
+			return data[0].get("value")
+		except Exception as e:
+			_LOG.error(f"[DB] get({key}) failed: {str(e)[:100]}")
 			return None
-		return data[0].get("value")
 
 	def set(self, key, value, ex=None):
-		self.client.table(self.table).upsert({"key": key, "value": value}).execute()
-		return True
+		def _query():
+			return self.client.table(self.table).upsert({"key": key, "value": value}).execute()
+		try:
+			self._retry_operation(_query, f"UPSERT {key}")
+			return True
+		except Exception as e:
+			_LOG.error(f"[DB] set({key}) failed: {str(e)[:100]}")
+			return False
 
 	def lpush(self, key, *values):
-		items = self.get(key)
-		if not isinstance(items, list):
-			items = []
-		for value in values:
-			items.insert(0, value)
-		self.set(key, items)
-		return len(items)
+		try:
+			items = self.get(key)
+			if not isinstance(items, list):
+				items = []
+			for value in values:
+				items.insert(0, value)
+			self.set(key, items)
+			return len(items)
+		except Exception as e:
+			_LOG.error(f"[DB] lpush({key}) failed: {str(e)[:100]}")
+			return 0
 
 	def lrange(self, key, start, end):
-		items = self.get(key)
-		if not isinstance(items, list):
+		try:
+			items = self.get(key)
+			if not isinstance(items, list):
+				return []
+			stop = None if end == -1 else end + 1
+			return items[start:stop]
+		except Exception as e:
+			_LOG.error(f"[DB] lrange({key}) failed: {str(e)[:100]}")
 			return []
-		stop = None if end == -1 else end + 1
-		return items[start:stop]
 
 	def delete(self, key):
-		self.client.table(self.table).delete().eq("key", key).execute()
-		return True
+		def _query():
+			return self.client.table(self.table).delete().eq("key", key).execute()
+		try:
+			self._retry_operation(_query, f"DELETE {key}")
+			return True
+		except Exception as e:
+			_LOG.error(f"[DB] delete({key}) failed: {str(e)[:100]}")
+			return False
 
 	def flushdb(self):
-		self.client.table(self.table).delete().neq("key", "").execute()
-		return True
+		def _query():
+			return self.client.table(self.table).delete().neq("key", "").execute()
+		try:
+			self._retry_operation(_query, "FLUSHDB")
+			return True
+		except Exception as e:
+			_LOG.error(f"[DB] flushdb() failed: {str(e)[:100]}")
+			return False
 
 	def ping(self):
-		self.client.table(self.table).select("key").limit(1).execute()
-		return True
+		def _query():
+			return self.client.table(self.table).select("key").limit(1).execute()
+		try:
+			self._retry_operation(_query, "PING")
+			return True
+		except Exception as e:
+			_LOG.error(f"[DB] ping() failed: {str(e)[:100]}")
+			return False
 
 
 @st.cache_resource
