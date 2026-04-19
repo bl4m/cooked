@@ -221,7 +221,15 @@ def show_war_room():
     dn       = user.get("display_name", username)
 
     # ── SESSION DEFAULTS ─────────────────────────────────────
-    if "active_tab" not in st.session_state: st.session_state.active_tab = "Home"
+    # Check URL query params to restore tab across browser refresh
+    tab_from_url = st.query_params.get("tab", "Home")
+    valid_tabs = ["Home", "Tasks (Human)", "Tasks (Bot)", "Strategy Deck", "Leaderboard"]
+    if tab_from_url not in valid_tabs:
+        tab_from_url = "Home"
+    
+    if "active_tab" not in st.session_state: 
+        st.session_state.active_tab = tab_from_url
+    
     if "ws_log"     not in st.session_state: st.session_state.ws_log     = []
     if "code_outputs" not in st.session_state: st.session_state.code_outputs = {}
     if "bot_code"   not in st.session_state: 
@@ -532,6 +540,7 @@ def show_war_room():
             st.markdown(f'<div class="{btn_cls}"></div>', unsafe_allow_html=True) # Styling hack
             if st.button(tname, key=f"tab_{tname}", use_container_width=True):
                 st.session_state.active_tab = tname
+                st.query_params["tab"] = tname
                 st.rerun()
 
     active = st.session_state.active_tab
