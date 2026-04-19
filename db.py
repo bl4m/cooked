@@ -361,6 +361,9 @@ def _init_state():
 		"task_done_by_user": {},  # Tracks completed tasks per username: {username: {task_id: timestamp}}
                 "task_done_by_team": {},  # Tracks completed bot/sovereign tasks per team: {team: {task_id: timestamp}}
         }
+
+
+def load_gs():
 	raw = R.get("ot:state")
 	if raw:
 		try:
