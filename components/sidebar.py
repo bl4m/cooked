@@ -172,4 +172,6 @@ def render_sidebar(gs, tc, dn, MT, my_hp, my_ap, my_terr,
             for k in ["logged_in", "username", "user_data", "active_tab",
                       "ws_log", "seeded", "code_outputs"]:
                 st.session_state.pop(k, None)
+            for k in ["user", "tab", "admin"]:
+                st.query_params.pop(k, None)
             st.rerun()

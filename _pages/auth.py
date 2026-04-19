@@ -46,6 +46,8 @@ def _login():
             st.session_state.logged_in  = True
             st.session_state.username   = username
             st.session_state.user_data  = result
+            st.query_params["user"] = username
+            st.query_params["tab"] = "Home"
             st.rerun()
         else:
             st.error(result)

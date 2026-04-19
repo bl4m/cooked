@@ -20,6 +20,16 @@ st.set_page_config(
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+if not st.session_state.logged_in:
+    restored_user = st.query_params.get("user")
+    if restored_user:
+        from db import get_user
+        restored = get_user(restored_user)
+        if restored:
+            st.session_state.logged_in = True
+            st.session_state.username = restored_user
+            st.session_state.user_data = restored
+
 if st.query_params.get("admin") == "true":
     from _pages.admin import show_admin_page
     show_admin_page()

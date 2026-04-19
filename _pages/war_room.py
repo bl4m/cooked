@@ -492,6 +492,8 @@ def show_war_room():
         if st.button("LOGOUT / RECONNECT", use_container_width=True):
             for k in ["logged_in","username","user_data","active_tab","bot_code"]:
                 st.session_state.pop(k, None)
+            for k in ["user", "tab", "admin"]:
+                st.query_params.pop(k, None)
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 

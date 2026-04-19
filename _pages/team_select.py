@@ -64,4 +64,6 @@ def show_team_page():
         for k in ["logged_in", "username", "user_data", "active_section",
                   "ws_log", "seeded", "code_outputs"]:
             st.session_state.pop(k, None)
+        for k in ["user", "tab", "admin"]:
+            st.query_params.pop(k, None)
         st.rerun()
