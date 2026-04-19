@@ -526,6 +526,8 @@ def run_bot_task(task_id: str, user_code: str, team: str, gs: dict) -> tuple[boo
 		solve_times[team] = now
 		from datetime import datetime
 		gs.setdefault("task_done_by_team", {}).setdefault(team, {})[task_id] = datetime.utcnow().isoformat()
+		
+		return True, f"✅ {task['verify_token']}"
 	
 	except Exception as e:
 		return False, f"❌ Verification error: {str(e)[:80]}"
