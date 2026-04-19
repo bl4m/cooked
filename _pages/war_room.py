@@ -185,6 +185,7 @@ def _mount_live_timer_sync(epoch_end_iso: str, epoch_duration_secs: int):
                 const mm = String(Math.floor(rem / 60)).padStart(2, '0');
                 const ss = String(rem % 60).padStart(2, '0');
                 timerEl.textContent = `${{mm}}:${{ss}}`;
+                timerEl.style.opacity = '1';
 
                 const pct = Math.max(0, Math.min(100, (rem / EPOCH_SECS) * 100));
                 barEl.style.width = `${{pct.toFixed(1)}}%`;
@@ -229,14 +230,18 @@ def show_war_room():
     except Exception:
         remaining = EPOCH_DURATION_SECS
 
-    # Adaptive reruns keep game state/current warnings fresh while limiting flicker.
-    if remaining <= 10:
-        refresh_ms = 2000
-    elif remaining <= 60:
-        refresh_ms = 4000
-    else:
-        refresh_ms = 12000
-    st_autorefresh(interval=refresh_ms, limit=None, key="ot_refresh")
+    # ── EPOCH STATE TRACKING (Rerun only when epoch changes) ──
+    if "last_epoch_seen" not in st.session_state:
+        st.session_state.last_epoch_seen = gs.get("epoch", 0)
+    
+    # Detect epoch change and trigger check
+    current_epoch = gs.get("epoch", 0)
+    if current_epoch > st.session_state.last_epoch_seen:
+        st.session_state.last_epoch_seen = current_epoch
+
+    # Minimal background check for epoch rollover (~every 30s, user won't see flicker)
+    # This ensures epoch logic triggers even if user is idle. Client-side JS handles smooth timer updates.
+    st_autorefresh(interval=30000, limit=None, key="ot_epoch_check")
 
     if "queued_attacks" not in gs: gs["queued_attacks"] = []
     if "shadow_task_ap" not in gs: gs["shadow_task_ap"] = {}
@@ -455,7 +460,7 @@ def show_war_room():
         <div class="ot-epoch-num">EPOCH {gs['epoch']}</div>
         <div class="ot-epoch-phase">{gs['phase']}</div>
     </div>
-    <div class="ot-timer" id="ot-live-timer" style="color:{timer_color}">{mins_left:02d}:{secs_left:02d}</div>
+        <div class="ot-timer" id="ot-live-timer" style="color:{timer_color};opacity:0">--:--</div>
 </div>
 <div class="ot-tbar"><div class="ot-tbar-fill" id="ot-live-bar" style="width:{pct_left*100:.1f}%"></div></div>
 """, unsafe_allow_html=True)
