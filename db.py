@@ -173,9 +173,10 @@ def get_store():
 	global ACTIVE_DB_NAME
 	global ACTIVE_DB_TABLE
 	try:
-		url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
-		key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
-		table = st.secrets.get("SUPABASE_TABLE", os.getenv("SUPABASE_TABLE", "ot_store"))
+		# Try environment variables first (Railway), then fall back to st.secrets (local)
+		url = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
+		key = os.getenv("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")
+		table = os.getenv("SUPABASE_TABLE") or st.secrets.get("SUPABASE_TABLE", "ot_store")
 		if not url or not key:
 			raise ValueError("SUPABASE_URL/SUPABASE_KEY not configured")
 		store = SupabaseStore(url, key, table)

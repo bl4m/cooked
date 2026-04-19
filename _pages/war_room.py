@@ -219,7 +219,7 @@ def show_war_room():
     dn       = user.get("display_name", username)
 
     # ── SESSION DEFAULTS ─────────────────────────────────────
-    # Check URL query params to restore tab across browser refresh
+    # Check URL query params to restore tab across bro. wser refresh
     tab_from_url = st.query_params.get("tab", "Home")
     valid_tabs = ["Home", "Tasks (Human)", "Tasks (Bot)", "Strategy Deck", "Leaderboard"]
     if tab_from_url not in valid_tabs:
