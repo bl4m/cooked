@@ -169,7 +169,6 @@ def _task_attempt_panel(task: dict, team: str, username: str):
             _mark_user_task_done(current_gs, username, task_id)
             current_gs.setdefault("team_task_cooldown", {})[team] = time.time() + TASK_COOLDOWN_SECS
             save_gs(current_gs)
-            push_ev("TASK", f"{username} solved {task_id}! Team cooldown triggered.", team)
             st.success("Correct answer. AP awarded. Team cooldown applied.")
             st.rerun()
         else:
