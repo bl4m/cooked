@@ -441,3 +441,90 @@ def run_code_safe(code: str, timeout: int = 5) -> tuple[str, str]:
 		return "", "[TIMEOUT] "
 	except Exception as exc:
 		return "", str(exc)
+
+
+def run_bot_task(task_id: str, user_code: str, team: str, gs: dict) -> tuple[bool, str]:
+	"""
+	Orchestrator for bot task execution.
+	
+	VERIFY ONLY - does not apply AP rewards (handled by caller to support backstab/suspicion).
+	
+	Args:
+		task_id: Task ID (e.g., "NA_06")
+		user_code: User's Python code defining the required function
+		team: Team ID
+		gs: Game state dict
+	
+	Returns:
+		(success: bool, message: str)
+	"""
+	import time
+	from config import BOT_TASKS, TASK_COOLDOWN_SECS
+	
+	# Check if task exists
+	if task_id not in BOT_TASKS:
+		return False, f"Task {task_id} not found"
+	
+	task = BOT_TASKS[task_id]
+	
+	# Check if already solved
+	solved = gs.get("bot_solved", {})
+	if task_id in solved:
+		return False, f"✅ Already solved {task_id}. No repeat submissions."
+	
+	# Check 30-second solve time limit per team
+	now = time.time()
+	solve_times = gs.setdefault("bot_solve_time", {})
+	last_submit = solve_times.get(team, now - 35)
+	time_remaining = int(30 - (now - last_submit))
+	
+	if now - last_submit < 30:
+		return False, f"⏱️ Solve limit active: {time_remaining}s remaining. One submission per 30s."
+	
+	# Combine user code + test harness
+	full_code = user_code + "\n" + task["test_harness"]
+	
+	# Run code safely
+	stdout, stderr = run_code_safe(full_code, timeout=5)
+	
+	if stderr and "[SECURITY]" in stderr:
+		return False, f"❌ {stderr}"
+	
+	if stderr and "[TIMEOUT]" in stderr:
+		return False, f"❌ Code execution timeout (>5s)"
+	
+	if stderr:
+		# Runtime error
+		error_msg = stderr.split('\n')[0] if stderr else "Unknown error"
+		return False, f"❌ Runtime error: {error_msg[:80]}"
+	
+	# Extract verify_val from stdout
+	try:
+		# The test harness computes verify_val
+		# We need to extract it by executing the code and checking the result
+		exec_globals = {}
+		exec(full_code, exec_globals)
+		verify_val = exec_globals.get("verify_val", None)
+		
+		if verify_val is None:
+			return False, "❌ Test harness did not compute verify_val"
+		
+		expected = task["expected_output"]
+		
+		# Compare (with type tolerance for floats)
+		if isinstance(expected, float) and isinstance(verify_val, (int, float)):
+			match = abs(verify_val - expected) < 0.01
+		else:
+			match = verify_val == expected
+		
+		if not match:
+			return False, f"❌ Wrong answer. Got: {verify_val}, Expected: {expected}"
+		
+		# Success! Mark as solved and update solve time (but AP is handled by caller)
+		solve_times[team] = now
+		gs.setdefault("bot_solved", {})[task_id] = now
+		
+		return True, f"✅ {task['verify_token']}"
+	
+	except Exception as e:
+		return False, f"❌ Verification error: {str(e)[:80]}"

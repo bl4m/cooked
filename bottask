@@ -1,0 +1,123 @@
+1. Neural Architect (Advanced Pattern Processing)
+Task ID
+Description
+Verify Token
+NA_06
+Perform a 3x3 Convolution on a 10x10 grid with a custom kernel
+CONV_RESULT
+NA_07
+Rotate a 5x5 matrix 90 degrees clockwise
+ROT_COMPLETE
+NA_08
+Identify the longest contiguous chain of '1's (blob analysis)
+BLOB_MAX_LEN
+NA_09
+Apply a Gaussian blur approximation (avg of neighbors)
+BLUR_STABLE
+NA_10
+Perform Gaussian Thresholding on a 10x10 matrix
+THRESH_APPLIED
+
+
+
+2. Cipher Breaker (Advanced Cryptography)
+Task ID
+Description
+Verify Token
+CB_06
+Decrypt Vigenère Cipher (needs key recovery)
+VIG_DECRYPTED
+CB_07
+Modular exponentiation: $(base^{exp}) \mod{mod}$
+MOD_EXP_OK
+CB_08
+Brute force 3-digit salt given a modulo hash
+SALT_CRACKED
+CB_09
+Bitwise circular left-rotate on 32-bit int
+BIT_ROTATED
+CB_10
+Verify an HMAC-SHA256 signature using provided key
+HMAC_VERIFIED
+
+3. Stream Vector (Advanced Data Engineering)
+Task ID
+Description
+Verify Token
+SV_06
+Find the median of a streaming dataset (using Min/Max Heaps)
+MEDIAN_CALC
+SV_07
+Delta Compression: Return list of differences between indices
+DELTA_COMP
+SV_08
+Identify the index where the cumulative sum exceeds a threshold
+CUMSUM_LIMIT
+SV_09
+Perform an Inner Join on two list-of-dicts via foreign key
+JOIN_SUCCESS
+SV_10
+Find the Longest Increasing Subsequence (LIS) in a list
+LIS_LENGTH
+
+4. Strategy Matrix (Hardcore Game Theory)
+Task ID
+Description
+Verify Token
+SM_06
+Alpha-Beta Pruning: Prune subtrees based on score
+PRUNED_VAL
+SM_07
+Dynamic Programming: Solve 0/1 Knapsack for items with weights
+KNAP_OPTIMIZED
+SM_08
+Identify the winning move in a 4x4 connect-four board
+WIN_MOVE
+SM_09
+Calculate the Nash Equilibrium for a 2x2 payoff matrix
+NASH_EQUIL
+SM_10
+Predict the next state after 3 moves given opponent behavior
+STATE_PRED
+
+5. Anomaly Guard (Statistical/Advanced)
+Task ID
+Description
+Verify Token
+AG_06
+Change-point detection: Find index where mean shifts > 30%
+SHIFT_DETECTED
+AG_07
+Compute Variance Windowing (Detect volatility spike)
+VOLATILITY_OK
+AG_08
+Pearson Correlation: Check if two streams are correlated
+CORR_POSITIVE
+AG_09
+Logistic Regression: Return True/False based on sigmoid input
+LOGISTIC_VAL
+AG_10
+Isolation Forest logic: Is the value an outlier given the cluster?
+ISOLATION_TRUE
+
+6. Resource Optimizer (Graph Algorithms)
+Task ID
+Description
+Verify Token
+RO_06
+A* Pathfinding: Find shortest path using Heuristic cost
+A_STAR_DONE
+RO_07
+Max-Flow (Ford-Fulkerson): Find bottleneck capacity
+MAX_FLOW_OK
+RO_08
+Traveling Salesman (Heuristic): 5-node path cost calculation
+TSP_OPTIMAL
+RO_09
+Minimum Spanning Tree (Prim's): Calculate cost
+MST_WEIGHT
+RO_10
+Identify the node with the highest Betweenness Centrality
+CENTRALITY_ID
+
+

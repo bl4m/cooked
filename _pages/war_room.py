@@ -5,6 +5,7 @@ Neon UI + Grid Map + Automated Attack Bot Execution
 
 import json
 import time
+import uuid
 from datetime import datetime, timedelta
 import streamlit as st
 import streamlit.components.v1 as components
@@ -166,8 +167,10 @@ def _task_attempt_panel(task: dict, team: str, username: str):
                 solver_label=username,
             )
             _mark_user_task_done(current_gs, username, task_id)
+            current_gs.setdefault("team_task_cooldown", {})[team] = time.time() + TASK_COOLDOWN_SECS
             save_gs(current_gs)
-            st.success("Correct answer. AP awarded.")
+            push_ev("TASK", f"{username} solved {task_id}! Team cooldown triggered.", team)
+            st.success("Correct answer. AP awarded. Team cooldown applied.")
             st.rerun()
         else:
             current_gs.setdefault("team_task_cooldown", {})[team] = time.time() + TASK_COOLDOWN_SECS
@@ -332,6 +335,31 @@ def show_war_room():
             damage = executed_hits * 100
             gs["ap"][actor] = ap_available - (executed_hits * ATTACK_COST_AP)
             gs["hp"][target] = max(0, int(gs["hp"].get(target, 0)) - damage)
+            
+            # Territory loss on heavy damage (>1500 dmg = lose 1-3 cells to wilderness)
+            if damage > 1500:
+                cells_to_lose = min(3, damage // 1000)
+                target_cells = [i for i, cell in enumerate(gs["grid"]) if cell == target]
+                if target_cells and cells_to_lose > 0:
+                    import random
+                    for _ in range(min(cells_to_lose, len(target_cells))):
+                        cell_idx = random.choice(target_cells)
+                        gs["grid"][cell_idx] = ""
+                        target_cells.remove(cell_idx)
+            
+            # Territory steal on multi-hit attacks (3+ hits = steal 1 territory from target)
+            if executed_hits >= 3:
+                target_cells = [i for i, cell in enumerate(gs["grid"]) if cell == target]
+                if target_cells:
+                    import random
+                    stolen_cell = random.choice(target_cells)
+                    gs["grid"][stolen_cell] = actor
+                    push_ev(
+                        "ATTACK",
+                        f"TERRITORIAL CONQUEST: {actor} stole cell #{stolen_cell} from {target}!",
+                        actor,
+                    )
+            
             push_ev(
                 "ATTACK",
                 f"EPOCH STRIKE: {actor} executed {executed_hits}/{requested_hits} hits on {target} (-{damage} HP, -{executed_hits * ATTACK_COST_AP} AP).",
@@ -344,8 +372,17 @@ def show_war_room():
                 for i in range(len(gs["grid"])):
                     if gs["grid"][i] == t:
                         gs["grid"][i] = ""
+        
+        # 5. Territory-Based AP Generation (Economy)
+        for team in list(gs["hp"].keys()):
+            if gs["hp"].get(team, 0) > 0:
+                terr = sum(1 for cell in gs["grid"] if cell == team)
+                ap_gain = terr * 50
+                gs["ap"][team] = int(gs["ap"].get(team, 0)) + ap_gain
+                if ap_gain > 0:
+                    push_ev("SYS", f"{team} earned +{ap_gain} AP from {terr} territories.", team)
                         
-        # 5. Victory Assessment
+        # 6. Victory Assessment
         living = [t for t, hp in gs["hp"].items() if hp > 0]
         if gs["epoch"] > 1 and len(gs["hp"]) > 1:
             if len(living) == 1:
@@ -499,7 +536,7 @@ def show_war_room():
         return  # Halt loading normal dashboard
         
     # ── MAIN TABS ────────────────────────────────────────────
-    tab_names = ["Home", "Tasks Human", "Tasks (Bot)", "Strategy Deck"]
+    tab_names = ["Home", "Tasks (Human)", "Tasks (Bot)", "Strategy Deck", "Leaderboard"]
     tab_cols  = st.columns(len(tab_names), gap="small")
     for i, tname in enumerate(tab_names):
         with tab_cols[i]:
@@ -514,11 +551,11 @@ def show_war_room():
 
     is_eliminated = gs["hp"].get(MT, 0) <= 0
 
-    if is_eliminated and active != "Home":
+    if is_eliminated and active not in ["Home", "Leaderboard"]:
         st.markdown(f"""
         <div style="background:rgba(255,10,50,0.1); border:1px solid #FF2244; padding:60px 20px; text-align:center; border-radius:10px; box-shadow:0 0 80px rgba(255,10,50,0.3) inset;">
             <h1 style="font-family:'Orbitron',monospace; color:#FF2244; margin:0; font-size:3rem; text-shadow:0 0 20px #FF2244; letter-spacing:10px">KINGDOM FALLEN</h1>
-            <p style="font-family:'Share Tech Mono',monospace; color:#ccc; margin-top:20px; font-size:1.2rem;">Your HP has reached 0. You are permanently eliminated from the war.</p>
+            <p style="font-family:'Share Tech Mono',monospace; color:#ccc; margin-top:20px; font-size:1.2rem;">Your HP has reached 0. You are permanently eliminated from the war. Watch the Leaderboard or return Home.</p>
         </div>
         """, unsafe_allow_html=True)
     # ─────────────────────────────────────────────────────────────
@@ -740,7 +777,7 @@ def show_war_room():
     # ─────────────────────────────────────────────────────────────
     # TASKS HUMAN
     # ─────────────────────────────────────────────────────────────
-    elif active == "Tasks Human":
+    elif active == "Tasks (Human)":
         team_cd_rem = _team_task_cd_remaining(gs, MT)
         if team_cd_rem > 0:
             st.markdown(
@@ -776,59 +813,147 @@ def show_war_room():
     # TASKS BOT (Code editor)
     # ─────────────────────────────────────────────────────────────
     elif active == "Tasks (Bot)":
-        st.markdown('<div class="sec-lbl">💻 BOT TASKS · PYTHON CHALLENGES</div>', unsafe_allow_html=True)
-        sov_task_names = {t["id"]: t["title"] for t in TASKS["sovereign"]}
-        sel_id = st.selectbox(
-            "Load task template",
-            options=["custom"] + [t["id"] for t in TASKS["sovereign"]],
-            format_func=lambda x: "— Scratchpad —" if x == "custom" else sov_task_names[x],
-            key="bot_task_sel"
-        )
+        from config import BOT_TASKS
+        from db import run_bot_task
         
-        default_code = "# Scratchpad\nprint('Hello World')"
-        if sel_id != "custom":
-            task_obj = next((t for t in TASKS["sovereign"] if t["id"] == sel_id), None)
-            if task_obj: default_code = task_obj.get("starter", default_code)
-
-        code_key = f"b_code_{sel_id}"
-        if code_key not in st.session_state: st.session_state[code_key] = default_code
-
-        user_code = st.text_area("Code Editor", value=st.session_state[code_key], height=280, key=f"b_editor_{sel_id}", label_visibility="collapsed")
-        st.session_state[code_key] = user_code
-
-        r_col, s_col = st.columns([1, 1], gap="small")
-        with r_col: run_c = st.button("▶ RUN", key="b_run", use_container_width=True)
-        with s_col: sub_c = st.button("✓ SUBMIT FOR AP", key="b_submit", use_container_width=True, disabled=(sel_id=="custom"))
-
-        out_key = f"b_out_{sel_id}"
-        if run_c:
-            so, se = run_code_safe(user_code)
-            st.session_state.code_outputs[out_key] = {"stdout":so, "stderr":se, "ts": datetime.utcnow().strftime("%H:%M:%S")}
-        if sub_c and sel_id != "custom":
-            so, se = run_code_safe(user_code)
-            st.session_state.code_outputs[out_key] = {"stdout":so, "stderr":se, "ts": datetime.utcnow().strftime("%H:%M:%S")}
-            if not se:
-                task_obj = next(t for t in TASKS["sovereign"] if t["id"] == sel_id)
-                _apply_task_rewards(
-                    gs,
-                    solver_team=MT,
-                    pts=int(task_obj["pts"]),
-                    task_title=task_obj["title"],
-                    solver_label=f"Team {MT}",
+        st.markdown('<div class="sec-lbl">💻 BOT TASKS · PYTHON CHALLENGES</div>', unsafe_allow_html=True)
+        
+        # Organize tasks by category
+        solved = gs.get("bot_solved", {})
+        categories = {}
+        for task_id, task in BOT_TASKS.items():
+            cat = task["category"]
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append(task)
+        
+        # Count solved per category
+        cat_progress = {}
+        cat_list = ["Neural Architect", "Cipher Breaker", "Stream Vector", "Strategy Matrix", "Anomaly Guard", "Resource Optimizer"]
+        for cat in cat_list:
+            if cat in categories:
+                solved_count = sum(1 for t in categories[cat] if t["id"] in solved)
+                cat_progress[cat] = (solved_count, len(categories[cat]))
+        
+        # Category selector (tabs)
+        tab_cols = st.columns(len(cat_list), gap="small")
+        selected_cat = None
+        for idx, cat in enumerate(cat_list):
+            if cat not in categories:
+                continue
+            solved_cnt, total_cnt = cat_progress.get(cat, (0, 0))
+            with tab_cols[idx]:
+                if st.button(f"{cat[:12]}\n{solved_cnt}/{total_cnt}", use_container_width=True, key=f"cat_btn_{cat}"):
+                    st.session_state["selected_bot_cat"] = cat
+        
+        # Get selected category (persist in session)
+        selected_cat = st.session_state.get("selected_bot_cat", cat_list[0])
+        if selected_cat not in categories:
+            selected_cat = cat_list[0]
+            st.session_state["selected_bot_cat"] = selected_cat
+        
+        # Show task cards in 2-column layout
+        if selected_cat in categories:
+            tasks_in_cat = sorted(categories[selected_cat], key=lambda t: t["id"])
+            task_cols = st.columns(2, gap="small")
+            
+            for idx, task in enumerate(tasks_in_cat):
+                task_id = task["id"]
+                is_solved = task_id in solved
+                dc = DIFF_COLOR[task["difficulty"]]
+                
+                with task_cols[idx % 2]:
+                    solved_badge = '<div style="color:#00CC88;font-size:0.72rem;margin-top:6px">✅ Solved</div>' if is_solved else ""
+                    st.markdown(f"""
+                    <div class="tc" style="border-top:2px solid {dc}44">
+                        <div class="tc-diff" style="background:{dc}18;color:{dc};border:1px solid {dc}44">{task['difficulty']}</div>
+                        <div class="tc-title">{task['id']} · {task['title']}</div>
+                        <div class="tc-desc">{task['description']}</div>
+                        <div class="tc-pts">+{task['ap_reward']} AP</div>
+                        {solved_badge}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    btn_label = "SOLVE" if not is_solved else "DONE"
+                    if st.button(btn_label, key=f"open_bot_{task_id}", use_container_width=True, disabled=is_solved):
+                        st.session_state["selected_bot_task"] = task_id
+                        st.rerun()
+        
+        # Task detail view (modal-like experience)
+        if "selected_bot_task" in st.session_state:
+            task_id = st.session_state["selected_bot_task"]
+            if task_id in BOT_TASKS:
+                task = BOT_TASKS[task_id]
+                
+                st.divider()
+                
+                # Header
+                st.markdown(f'<div style="font-family:Orbitron,monospace;font-size:1.3rem;color:var(--gold);margin-bottom:8px">{task["id"]} · {task["title"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="font-size:0.9rem;color:var(--dim);margin-bottom:16px">{task["description"]}</div>', unsafe_allow_html=True)
+                
+                # Code editor
+                code_key = f"bot_code_{task_id}"
+                if code_key not in st.session_state:
+                    st.session_state[code_key] = task["template"]
+                
+                st.markdown("**Your Code**")
+                user_code = st.text_area(
+                    "Enter your solution",
+                    value=st.session_state[code_key],
+                    height=280,
+                    key=f"bot_editor_{task_id}",
+                    label_visibility="collapsed"
                 )
-                save_gs(gs)
-                st.success("Accepted! AP awarded.")
-            else:
-                st.error("Errors detected.")
-
-        out = st.session_state.code_outputs.get(out_key)
-        if out:
-            out_html = f'<div class="code-term"><div style="color:#555">RUN @ {out["ts"]}</div>'
-            if out["stdout"]: out_html += f'<div class="stdout">{out["stdout"]}</div>'
-            if out["stderr"]: out_html += f'<div class="stderr">{out["stderr"]}</div>'
-            if not out["stdout"] and not out["stderr"]: out_html += '<div class="ok">✓ No output</div>'
-            out_html += '</div>'
-            st.markdown(out_html, unsafe_allow_html=True)
+                st.session_state[code_key] = user_code
+                
+                # Buttons
+                col1, col2, col3 = st.columns([2, 1, 1], gap="small")
+                with col1:
+                    submit_btn = st.button(
+                        f"🚀 SUBMIT (+{task['ap_reward']} AP)",
+                        key=f"submit_{task_id}",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                with col2:
+                    if st.button("Reset", key=f"reset_{task_id}", use_container_width=True):
+                        st.session_state[code_key] = task["template"]
+                        st.rerun()
+                with col3:
+                    if st.button("Back", key=f"back_{task_id}", use_container_width=True):
+                        st.session_state["selected_bot_task"] = None
+                        st.rerun()
+                
+                # Submission handling
+                if submit_btn:
+                    with st.spinner("Verifying..."):
+                        success, token_or_msg = run_bot_task(task_id, user_code, MT, gs)
+                        
+                        if success:
+                            # Verification passed - now apply rewards with backstab/suspicion mechanics
+                            _apply_task_rewards(
+                                gs,
+                                solver_team=MT,
+                                pts=int(task["ap_reward"]),
+                                task_title=f"{task['id']} · {task['title']}",
+                                solver_label=username,
+                            )
+                            save_gs(gs)
+                            
+                            # Show success with clean celebration
+                            st.markdown(f"""
+                            <div style="background:linear-gradient(135deg,#00CC8833,#D4AF3733);border:2px solid #00CC88;border-radius:12px;padding:24px;text-align:center;box-shadow:0 0 40px rgba(0,204,136,0.4)">
+                                <div style="font-family:Orbitron,monospace;font-size:1.8rem;color:#00CC88;margin-bottom:8px;text-shadow:0 0 20px #00CC8844">✓ SOLUTION VERIFIED</div>
+                                <div style="font-family:'Share Tech Mono',monospace;font-size:1.1rem;color:var(--text);margin-bottom:12px">Token: <span style="color:#D4AF37;font-weight:bold">{token_or_msg}</span></div>
+                                <div style="font-family:'Share Tech Mono',monospace;font-size:0.95rem;color:#00CC88">+{int(task['ap_reward'])} AP awarded</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            st.session_state["selected_bot_task"] = None
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error(token_or_msg)
 
     # ─────────────────────────────────────────────────────────────
     # STRATEGY DECK
@@ -962,6 +1087,7 @@ def show_war_room():
             if st.button("QUEUE ATTACK", use_container_width=True, disabled=not alive_targets):
                 gs.setdefault("queued_attacks", []).append(
                     {
+                        "id": str(uuid.uuid4()),
                         "actor": MT,
                         "target": target_team,
                         "hits": int(desired_hits),
@@ -987,16 +1113,10 @@ def show_war_room():
                         unsafe_allow_html=True,
                     )
                 with c_b:
-                    if st.button("Remove", key=f"rm_qatk_{idx}", use_container_width=True):
+                    attack_id = attack.get("id")
+                    if st.button("Remove", key=f"rm_qatk_{attack_id}", use_container_width=True):
                         queue = gs.get("queued_attacks", [])
-                        removed = False
-                        next_queue = []
-                        for item in queue:
-                            if not removed and item.get("actor") == MT and item.get("target") == target and int(item.get("hits", 1) or 1) == hits:
-                                removed = True
-                                continue
-                            next_queue.append(item)
-                        gs["queued_attacks"] = next_queue
+                        gs["queued_attacks"] = [a for a in queue if a.get("id") != attack_id]
                         save_gs(gs)
                         st.rerun()
             ap_now = int(gs["ap"].get(MT, 0))
@@ -1006,4 +1126,123 @@ def show_war_room():
                 f" Extra hits auto-skip at epoch end if AP is insufficient.</div>",
                 unsafe_allow_html=True,
             )
+
+        st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-lbl">🌍 TERRITORIAL EXPANSION · CLAIM RANDOM ADJACENT CELL</div>', unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='font-size:0.76rem;color:#aaa;margin-bottom:10px'>"
+            f"Cost: <b style='color:#00E5FF'>150 AP</b> per cell · Claims free cells closest to your territory for strategic expansion.</div>",
+            unsafe_allow_html=True,
+        )
+        
+        # Find unclaimed cells
+        unclaimed_cells = [i for i, cell in enumerate(gs["grid"]) if not cell]
+        
+        # Find my adjacent unclaimed cells (cells next to my territory)
+        my_cells = [i for i, cell in enumerate(gs["grid"]) if cell == MT]
+        claimable_with_dist = []
+        for other_idx in unclaimed_cells:
+            # Find minimum distance to any of my cells (preference for closer cells)
+            min_dist = min(abs(other_idx - my_idx) for my_idx in my_cells)
+            if min_dist <= 5:  # Rough spatial proximity threshold
+                claimable_with_dist.append((other_idx, min_dist))
+        
+        # Sort by distance (closest first) then randomize among closest
+        claimable_unclaimed = [idx for idx, dist in claimable_with_dist]
+        
+        if not claimable_unclaimed:
+            st.info("No unclaimed cells adjacent to your territory.")
+        else:
+            ap_now = int(gs["ap"].get(MT, 0))
+            can_afford = ap_now >= 150
+            
+            if st.button("🎲 EXPAND TERRITORY (150 AP)", use_container_width=True, disabled=not can_afford):
+                if can_afford and claimable_unclaimed:
+                    import random
+                    # Prioritize closer cells: weight selection towards those with smaller distance
+                    weighted_cells = sorted(claimable_with_dist, key=lambda x: x[1])[:len(claimable_with_dist)//2+1]
+                    selected_cell = random.choice([idx for idx, _ in weighted_cells])
+                    gs["grid"][selected_cell] = MT
+                    gs["ap"][MT] = ap_now - 150
+                    save_gs(gs)
+                    push_ev("SYS", f"{MT} claimed cell #{selected_cell}! Territory expanded.", MT)
+                    st.success(f"✅ Successfully claimed cell #{selected_cell}!")
+                    st.rerun()
+                elif not can_afford:
+                    st.error("❌ Insufficient AP (need 150).")
+
+
+    # ─────────────────────────────────────────────────────────────
+    # LEADERBOARD
+    # ─────────────────────────────────────────────────────────────
+    elif active == "Leaderboard":
+        st.markdown('<div class="sec-lbl">🏆 KINGDOM RANKINGS · LIVE STANDINGS</div>', unsafe_allow_html=True)
+        
+        # Build leaderboard data
+        leaderboard = []
+        for tname, tinfo in teams.items():
+            hp = int(gs["hp"].get(tname, STARTING_HP))
+            ap = int(gs["ap"].get(tname, 0))
+            terr = sum(1 for cell in gs["grid"] if cell == tname)
+            members = len(tinfo.get("members", []))
+            status = "🟢 ALIVE" if hp > 0 else "🔴 ELIMINATED"
+            status_color = "#00CC88" if hp > 0 else "#FF2244"
+            leaderboard.append({
+                "team": tname,
+                "color": tinfo.get("color", "#fff"),
+                "icon": tinfo.get("icon", "·"),
+                "hp": hp,
+                "ap": ap,
+                "territory": terr,
+                "members": members,
+                "status": status,
+                "status_color": status_color,
+            })
+        
+        # Sort by HP (descending)
+        leaderboard_sorted = sorted(leaderboard, key=lambda x: x["hp"], reverse=True)
+        
+        # Header row
+        st.markdown("""
+        <div style="display:grid;grid-template-columns:0.4fr 1.5fr 1.5fr 1.5fr 1.2fr 1fr;gap:12px;margin-bottom:8px;padding:0 8px">
+            <div style="font-family:'Orbitron',monospace;font-size:0.5rem;letter-spacing:2px;color:var(--dim);text-transform:uppercase">Rank</div>
+            <div style="font-family:'Orbitron',monospace;font-size:0.5rem;letter-spacing:2px;color:var(--dim);text-transform:uppercase">Kingdom</div>
+            <div style="font-family:'Orbitron',monospace;font-size:0.5rem;letter-spacing:2px;color:var(--dim);text-transform:uppercase">Health</div>
+            <div style="font-family:'Orbitron',monospace;font-size:0.5rem;letter-spacing:2px;color:var(--dim);text-transform:uppercase">AP</div>
+            <div style="font-family:'Orbitron',monospace;font-size:0.5rem;letter-spacing:2px;color:var(--dim);text-transform:uppercase">Territory</div>
+            <div style="font-family:'Orbitron',monospace;font-size:0.5rem;letter-spacing:2px;color:var(--dim);text-transform:uppercase">Status</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Display rankings as rows
+        for rank, team_data in enumerate(leaderboard_sorted, start=1):
+            hp_pct = max(0, min(100, team_data['hp'] / STARTING_HP * 100))
+            status_symbol = "●" if "ALIVE" in team_data["status"] else "◆"
+            
+            st.markdown(f"""
+            <div style="display:grid;grid-template-columns:0.4fr 1.5fr 1.5fr 1.5fr 1.2fr 1fr;gap:12px;padding:10px 8px;background:rgba(212,175,55,0.02);border-bottom:1px solid rgba(212,175,55,0.08);border-radius:2px;align-items:center">
+                <div style="font-family:'Orbitron',monospace;font-size:1rem;font-weight:700;color:var(--gold);text-align:center">#{rank}</div>
+                <div>
+                    <div style="color:{team_data['color']};font-weight:700;font-family:'Share Tech Mono',monospace;font-size:0.85rem">{team_data['icon']} {team_data['team']}</div>
+                    <div style="font-size:0.65rem;color:var(--dim);margin-top:2px">{team_data['members']} members</div>
+                </div>
+                <div>
+                    <div style="color:{'#FF2244' if team_data['hp'] <= 1000 else team_data['color']};font-weight:700;font-family:'Share Tech Mono',monospace">{team_data['hp']:,} HP</div>
+                    <div style="width:100%;height:4px;background:rgba(0,0,0,0.5);border-radius:1px;margin-top:4px;overflow:hidden">
+                        <div style="width:{hp_pct}%;height:100%;background:linear-gradient(90deg,{team_data['color']},{'#FF2244' if team_data['hp'] <= 1000 else team_data['color']})"></div>
+                    </div>
+                </div>
+                <div style="font-family:'Share Tech Mono',monospace;font-size:0.9rem">
+                    <div style="color:#00E5FF;font-weight:700">{team_data['ap']:,}</div>
+                    <div style="font-size:0.65rem;color:var(--dim);margin-top:2px">AP</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-family:'Orbitron',monospace;font-size:1.2rem;color:var(--gold);font-weight:700">{team_data['territory']}</div>
+                    <div style="font-size:0.65rem;color:var(--dim);margin-top:2px">cells</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="color:{team_data['status_color']};font-weight:700;font-family:'Share Tech Mono',monospace;font-size:0.75rem;letter-spacing:1px">{status_symbol} {team_data['status']}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
