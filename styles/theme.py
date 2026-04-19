@@ -22,7 +22,7 @@ _CSS = """
     font-family:'Rajdhani',sans-serif; color:var(--text) !important;
 }
 
-#MainMenu, footer, .stDeployButton { display: none !important; }
+#MainMenu, footer, .stDeployButton, [data-testid="stFooter"], [data-testid="stMainMenu"], [data-testid="stDecoration"] { display: none !important; }
 [data-baseweb="tab-list"] { display: none !important; }
 [data-testid="stHeader"] { background: transparent !important; height: 0 !important; min-height: 0 !important; overflow: visible !important; }
 [data-testid="stToolbar"] { display: none !important; }
