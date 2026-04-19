@@ -118,18 +118,17 @@ def _action_card_mini(card: dict):
 def _handle_task_claim(task: dict, gs: dict, MT: str, dn: str, kind: str = "TASK"):
     from db import load_gs
     from _pages.war_room import _mark_team_task_done, _team_task_done
+
+    live_gs = load_gs()
+    if _team_task_done(live_gs, MT, task["id"]):
+        st.info("✓ Your team already completed this task.")
+        st.rerun()
+        return
     
     if random.random() < TASK_FAIL_CHANCE:
         push_ev(kind, f"Task FAILED — Team {MT}.", MT)
         st.error("❌ Task failed!")
     else:
-        # Check if team already completed this task
-        live_gs = load_gs()
-        if _team_task_done(live_gs, MT, task["id"]):
-            st.info("✓ Your team already completed this task.")
-            st.rerun()
-            return
-        
         # Award AP and mark task as done
         gs["ap"][MT] = int(gs["ap"].get(MT, 0)) + task["pts"]
         _mark_team_task_done(gs, MT, task["id"])

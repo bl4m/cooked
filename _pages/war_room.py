@@ -46,11 +46,11 @@ def _normalize_answer(value: str) -> str:
 
 
 def _user_task_done(gs: dict, username: str, task_id: str) -> bool:
-    return task_id in gs.get("task_done_by_user", {}).get(username, {})
+    return task_id in gs.get("task_done_by_team", {}).get(username, {})
 
 
 def _mark_user_task_done(gs: dict, username: str, task_id: str):
-    gs.setdefault("task_done_by_user", {}).setdefault(username, {})[task_id] = datetime.utcnow().isoformat()
+    gs.setdefault("task_done_by_team", {}).setdefault(username, {})[task_id] = datetime.utcnow().isoformat()
 
 
 def _team_task_done(gs: dict, team: str, task_id: str) -> bool:
@@ -124,7 +124,7 @@ def _task_attempt_panel(task: dict, team: str, username: str):
 
     live_gs = load_gs()
 
-    if _user_task_done(live_gs, username, task_id):
+    if _team_task_done(live_gs, team, task_id):
         st.success("You already solved this task.")
         return
 
@@ -141,11 +141,9 @@ def _task_attempt_panel(task: dict, team: str, username: str):
     if submit_clicked:
         current_gs = load_gs()
 
-        if _user_task_done(current_gs, username, task_id):
+        if _team_task_done(current_gs, team, task_id):
             st.info("Already solved earlier.")
             st.rerun()
-
-
 
         if not expected_answer:
             st.error("Answer key is not configured for this task.")
@@ -159,7 +157,7 @@ def _task_attempt_panel(task: dict, team: str, username: str):
                 task_title=task["title"],
                 solver_label=username,
             )
-            _mark_user_task_done(current_gs, username, task_id)
+            _mark_team_task_done(current_gs, team, task_id)
             save_gs(current_gs)
             st.success("Correct answer. AP awarded.")
             st.rerun()
@@ -781,7 +779,7 @@ def show_war_room():
         tc_cols = st.columns(2, gap="small")
         for i, task in enumerate(TASKS["monarch"]):
             dc = DIFF_COLOR[task["diff"]]
-            solved = _user_task_done(gs, username, task["id"])
+            solved = _team_task_done(gs, MT, task["id"])
             with tc_cols[i % 2]:
                 solved_badge = '<div style="color:#00CC88;font-size:0.72rem;margin-top:6px">✅ Solved</div>' if solved else ""
                 link_indicator = '🔗' if task.get("link") else ""
