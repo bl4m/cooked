@@ -791,22 +791,30 @@ def show_war_room():
             solved = _user_task_done(gs, username, task["id"])
             with tc_cols[i % 2]:
                 solved_badge = '<div style="color:#00CC88;font-size:0.72rem;margin-top:6px">✅ Solved</div>' if solved else ""
+                link_indicator = '🔗' if task.get("link") else ""
                 st.markdown(f"""
                 <div class="tc" style="border-top:2px solid {dc}44">
                     <div class="tc-diff" style="background:{dc}18;color:{dc};border:1px solid {dc}44">{task['diff']}</div>
-                    <div class="tc-title">{task['title']}</div>
+                    <div class="tc-title">{task['title']} {link_indicator}</div>
                     <div class="tc-desc">{task['desc']}</div>
                     <div class="tc-pts">+{task['pts']} AP</div>
                     {solved_badge}
                 </div>
                 """, unsafe_allow_html=True)
+                btn_cols = st.columns([1, 1] if task.get("link") else [1], gap="small")
                 attempt_disabled = solved or (team_cd_rem > 0)
                 btn_label = "DONE" if solved else f"ATTEMPT +{task['pts']} AP"
-                if attempt_disabled:
-                    st.button(btn_label, key=f"attempt_{task['id']}", use_container_width=True, disabled=True)
-                else:
-                    with st.popover(btn_label, key=f"attempt_popover_{task['id']}", use_container_width=True):
-                        _task_attempt_panel(task, MT, username)
+                
+                with btn_cols[0]:
+                    if attempt_disabled:
+                        st.button(btn_label, key=f"attempt_{task['id']}", use_container_width=True, disabled=True)
+                    else:
+                        with st.popover(btn_label, key=f"attempt_popover_{task['id']}", use_container_width=True):
+                            _task_attempt_panel(task, MT, username)
+                
+                if task.get("link") and len(btn_cols) > 1:
+                    with btn_cols[1]:
+                        st.link_button("📎 File", task["link"], use_container_width=True)
 
     # ─────────────────────────────────────────────────────────────
     # TASKS BOT (Code editor)
