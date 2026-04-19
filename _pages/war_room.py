@@ -571,10 +571,10 @@ def show_war_room():
 """, unsafe_allow_html=True)
     _mount_live_timer_sync(gs["epoch_end"], EPOCH_DURATION_SECS)
     
-    # Mount independent cooldown timer
-    cooldown_end_ts = gs.get("user_task_cooldown", {}).get(username, 0)
-    if cooldown_end_ts > 0:
-        _mount_cooldown_timer_sync(float(cooldown_end_ts))
+    # Mount independent cooldown timer (DISABLED - causes interaction issues)
+    # cooldown_end_ts = gs.get("user_task_cooldown", {}).get(username, 0)
+    # if cooldown_end_ts > 0:
+    #     _mount_cooldown_timer_sync(float(cooldown_end_ts))
 
     # ── VICTORY CONDITION DISPLAY ────────────────────────────
     if gs.get("game_over"):
