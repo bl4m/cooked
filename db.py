@@ -60,8 +60,8 @@ class SupabaseStore:
 
 		self.client = create_client(url, key)
 		self.table = table
-		self._max_retries = 2
-		self._retry_delay = 0.5  # seconds
+		self._max_retries = 1
+		self._retry_delay = 0.2  # seconds
 
 	def _retry_operation(self, operation_func, operation_name="operation"):
 		"""Execute operation with retry logic."""
@@ -180,7 +180,7 @@ def get_store():
 		if not url or not key:
 			raise ValueError("SUPABASE_URL/SUPABASE_KEY not configured")
 		store = SupabaseStore(url, key, table)
-		store.ping()
+		# Skip ping() to avoid startup hang on slow networks
 		SUPABASE_LAST_ERROR = ""
 		ACTIVE_DB_NAME = "SUPABASE"
 		ACTIVE_DB_TABLE = table

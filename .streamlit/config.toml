@@ -3,7 +3,6 @@ headless = true
 enableXsrfProtection = false
 enableCORS = false
 maxUploadSize = 200
-timeout = 300
 
 [client]
 showErrorDetails = true
@@ -11,9 +10,6 @@ toolbarMode = "minimal"
 
 [runner]
 magicEnabled = false
-
-[logger]
-level = "info"
 
 [browser]
 gatherUsageStats = false
