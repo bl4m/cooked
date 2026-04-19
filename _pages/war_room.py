@@ -294,6 +294,17 @@ def show_war_room():
         for actor, action in list(queued.items()):
             if action["action"] == "BACKSTAB" and gs["hp"].get(actor, 0) > 0 and actor not in blocked_backstabbers:
                 target = action["target"]
+                
+                # Check if backstab violates alliance cooldown (60 seconds)
+                alliance_formed_at = gs.get("alliance_formed_at", {}).get(actor)
+                if alliance_formed_at:
+                    formed_time = datetime.fromisoformat(alliance_formed_at)
+                    time_since_alliance = (datetime.utcnow() - formed_time).total_seconds()
+                    if time_since_alliance < 60:
+                        # Backstab blocked by cooldown - treat as failed attempt
+                        push_ev("SYS", f"ALLIANCE PROTECTION: {actor} attempted premature backstab on {target}. Alliance cooldown in effect ({int(60 - time_since_alliance)}s remaining).", actor)
+                        continue
+                
                 # Break alliance
                 if actor in gs["alliances"] and target in gs["alliances"][actor]: gs["alliances"][actor].remove(target)
                 if target in gs["alliances"] and actor in gs["alliances"][target]: gs["alliances"][target].remove(actor)
@@ -312,6 +323,13 @@ def show_war_room():
 
             if not actor or not target or actor == target:
                 continue
+            
+            # Check if target is an ally - block attack if so
+            actor_allies = gs.get("alliances", {}).get(actor, [])
+            if target in actor_allies:
+                push_ev("SYS", f"Queued attack blocked: {actor} cannot attack ally {target}.", actor)
+                continue
+            
             if int(gs["hp"].get(actor, 0)) <= 0:
                 push_ev("SYS", f"Queued attack skipped: {actor} is eliminated.", actor)
                 continue
@@ -1007,6 +1025,13 @@ def show_war_room():
                         gs["alliances"][MT] = [req_team]
                         gs["alliances"][req_team] = [MT]
 
+                        # Record formation time to prevent instant backstab (60 sec cooldown)
+                        if "alliance_formed_at" not in gs:
+                            gs["alliance_formed_at"] = {}
+                        now = datetime.utcnow().isoformat()
+                        gs["alliance_formed_at"][MT] = now
+                        gs["alliance_formed_at"][req_team] = now
+
                         gs["alliance_reqs"][MT].remove(req_team)
                         save_gs(gs)
                         push_ev("SYS", f"Team {MT} and {req_team} forged an Alliance!", MT)
@@ -1026,11 +1051,26 @@ def show_war_room():
             else:
                 t_bs = alliances[0]  # Only one alliance
                 if st.button(f"QUEUE BACKSTAB vs {t_bs}", use_container_width=True):
-                    if "queued_actions" not in gs:
-                        gs["queued_actions"] = {}
-                    gs["queued_actions"][MT] = {"action": "BACKSTAB", "target": t_bs}
-                    save_gs(gs)
-                    st.success("Backstab Queued!")
+                    # Validate: Check alliance cooldown
+                    alliance_formed_at = gs.get("alliance_formed_at", {}).get(MT)
+                    if alliance_formed_at:
+                        formed_time = datetime.fromisoformat(alliance_formed_at)
+                        time_since_alliance = (datetime.utcnow() - formed_time).total_seconds()
+                        if time_since_alliance < 60:
+                            remaining = int(60 - time_since_alliance)
+                            st.error(f"❌ Alliance cooldown: Wait {remaining}s before backstabbing.")
+                        else:
+                            if "queued_actions" not in gs:
+                                gs["queued_actions"] = {}
+                            gs["queued_actions"][MT] = {"action": "BACKSTAB", "target": t_bs}
+                            save_gs(gs)
+                            st.success("Backstab Queued!")
+                    else:
+                        if "queued_actions" not in gs:
+                            gs["queued_actions"] = {}
+                        gs["queued_actions"][MT] = {"action": "BACKSTAB", "target": t_bs}
+                        save_gs(gs)
+                        st.success("Backstab Queued!")
 
             if my_queued and my_queued["action"] == "BACKSTAB":
                 st.warning(f"Queued secretly vs: {my_queued['target']}")
@@ -1079,25 +1119,27 @@ def show_war_room():
 
         atk_col1, atk_col2, atk_col3 = st.columns([2, 1, 1], gap="small")
         with atk_col1:
-            alive_targets = [t for t in all_teams if int(gs["hp"].get(t, 0)) > 0]
-            target_team = st.selectbox("Target Team", alive_targets or ["--"], key="q_attack_target")
+            # Exclude allies from attack targets
+            valid_targets = [t for t in all_teams if int(gs["hp"].get(t, 0)) > 0 and t not in alliances]
+            target_team = st.selectbox("Target Team", valid_targets or ["--"], key="q_attack_target")
         with atk_col2:
             desired_hits = st.number_input("Hits", min_value=1, max_value=100, value=1, step=1, key="q_attack_hits")
         with atk_col3:
             st.markdown("<div style='height:26px'></div>", unsafe_allow_html=True)
-            if st.button("QUEUE ATTACK", use_container_width=True, disabled=not alive_targets):
-                gs.setdefault("queued_attacks", []).append(
-                    {
-                        "id": str(uuid.uuid4()),
-                        "actor": MT,
-                        "target": target_team,
-                        "hits": int(desired_hits),
-                        "created": datetime.utcnow().isoformat(),
-                    }
-                )
-                save_gs(gs)
-                push_ev("SYS", f"{MT} queued {int(desired_hits)} hit(s) on {target_team} for epoch end.", MT)
-                st.rerun()
+            if st.button("QUEUE ATTACK", use_container_width=True, disabled=not valid_targets):
+                if valid_targets and target_team != "--":
+                    gs.setdefault("queued_attacks", []).append(
+                        {
+                            "id": str(uuid.uuid4()),
+                            "actor": MT,
+                            "target": target_team,
+                            "hits": int(desired_hits),
+                            "created": datetime.utcnow().isoformat(),
+                        }
+                    )
+                    save_gs(gs)
+                    push_ev("SYS", f"{MT} queued {int(desired_hits)} hit(s) on {target_team} for epoch end.", MT)
+                    st.rerun()
 
         if my_attack_queue:
             st.markdown("<div style='font-size:0.8rem;color:#D4AF37;margin-top:8px'>YOUR QUEUED ATTACKS (IN ORDER)</div>", unsafe_allow_html=True)
@@ -1142,11 +1184,14 @@ def show_war_room():
         # Find my adjacent unclaimed cells (cells next to my territory)
         my_cells = [i for i, cell in enumerate(gs["grid"]) if cell == MT]
         claimable_with_dist = []
-        for other_idx in unclaimed_cells:
-            # Find minimum distance to any of my cells (preference for closer cells)
-            min_dist = min(abs(other_idx - my_idx) for my_idx in my_cells)
-            if min_dist <= 5:  # Rough spatial proximity threshold
-                claimable_with_dist.append((other_idx, min_dist))
+        
+        # Only calculate claimable cells if team has territory
+        if my_cells:
+            for other_idx in unclaimed_cells:
+                # Find minimum distance to any of my cells (preference for closer cells)
+                min_dist = min(abs(other_idx - my_idx) for my_idx in my_cells)
+                if min_dist <= 5:  # Rough spatial proximity threshold
+                    claimable_with_dist.append((other_idx, min_dist))
         
         # Sort by distance (closest first) then randomize among closest
         claimable_unclaimed = [idx for idx, dist in claimable_with_dist]
