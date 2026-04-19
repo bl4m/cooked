@@ -1,1 +1,1 @@
-web: streamlit run app.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --logger.level=info
+web: PORT=${PORT} streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --client.toolbarMode=minimal --logger.level=warning

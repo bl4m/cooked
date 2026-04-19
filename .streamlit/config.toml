@@ -1,11 +1,19 @@
 [server]
 headless = true
+enableXsrfProtection = false
+enableCORS = false
+maxUploadSize = 200
+timeout = 300
 
 [client]
 showErrorDetails = true
+toolbarMode = "minimal"
 
 [runner]
-# Disable multi-page auto-discovery from the pages/ folder
-# by placing our modules there but NOT having them be top-level page files
-# (Streamlit >=1.36 honors this)
 magicEnabled = false
+
+[logger]
+level = "info"
+
+[browser]
+gatherUsageStats = false
