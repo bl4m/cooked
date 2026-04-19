@@ -117,9 +117,7 @@ def _task_attempt_panel(task: dict, team: str, username: str):
     st.markdown(task["desc"])
 
     if drive_url:
-        st.markdown(f"[Open Problem Statement]({drive_url})")
-    else:
-        st.warning("Drive link is not configured for this task yet.")
+        st.markdown(f"[📎 Download File]({drive_url})")
 
     live_gs = load_gs()
 
