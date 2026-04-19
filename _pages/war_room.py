@@ -53,6 +53,16 @@ def _mark_user_task_done(gs: dict, username: str, task_id: str):
     gs.setdefault("task_done_by_user", {}).setdefault(username, {})[task_id] = datetime.utcnow().isoformat()
 
 
+def _team_task_done(gs: dict, team: str, task_id: str) -> bool:
+    """Check if a team has completed a bot/sovereign task."""
+    return task_id in gs.get("task_done_by_team", {}).get(team, {})
+
+
+def _mark_team_task_done(gs: dict, team: str, task_id: str):
+    """Mark a bot/sovereign task as completed by a team."""
+    gs.setdefault("task_done_by_team", {}).setdefault(team, {})[task_id] = datetime.utcnow().isoformat()
+
+
 def _visible_ap(gs: dict, team: str) -> int:
     """UI-only AP that can include hidden shadow points until epoch rollover."""
     real_ap = int(gs["ap"].get(team, 0))

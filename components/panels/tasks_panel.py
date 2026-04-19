@@ -28,7 +28,6 @@ def render_tasks_panel(gs, MT, dn):
                     f"CLAIM +{task['pts']} AP",
                     key=f"task_{task['id']}",
                     use_container_width=True,
-                    disabled=(cd_rem > 0),
                 ):
                     _handle_task_claim(task, gs, MT, dn)
 
@@ -47,13 +46,19 @@ def render_tasks_panel(gs, MT, dn):
             dc = DIFF_COLOR[task["diff"]]
             with (c1 if i % 2 == 0 else c2):
                 _task_card(task, dc, title_color="#9933FF")
-                if st.button(
-                    f"EXECUTE +{task['pts']} AP",
-                    key=f"task_{task['id']}",
-                    use_container_width=True,
-                    disabled=(cd_rem > 0),
-                ):
-                    _handle_task_claim(task, gs, MT, dn, kind="TASK")
+                from db import load_gs
+                from _pages.war_room import _team_task_done
+                live_gs = load_gs()
+                task_solved = _team_task_done(live_gs, MT, task["id"])
+                if task_solved:
+                    st.markdown('<div style="color:#00CC88;font-size:0.72rem;margin-top:6px">✅ Completed by team</div>', unsafe_allow_html=True)
+                else:
+                    if st.button(
+                        f"EXECUTE +{task['pts']} AP",
+                        key=f"task_{task['id']}",
+                        use_container_width=True,
+                    ):
+                        _handle_task_claim(task, gs, MT, dn, kind="TASK")
 
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
@@ -111,11 +116,23 @@ def _action_card_mini(card: dict):
 
 
 def _handle_task_claim(task: dict, gs: dict, MT: str, dn: str, kind: str = "TASK"):
+    from db import load_gs
+    from _pages.war_room import _mark_team_task_done, _team_task_done
+    
     if random.random() < TASK_FAIL_CHANCE:
         push_ev(kind, f"Task FAILED — Team {MT}.", MT)
         st.error("❌ Task failed!")
     else:
+        # Check if team already completed this task
+        live_gs = load_gs()
+        if _team_task_done(live_gs, MT, task["id"]):
+            st.info("✓ Your team already completed this task.")
+            st.rerun()
+            return
+        
+        # Award AP and mark task as done
         gs["ap"][MT] = int(gs["ap"].get(MT, 0)) + task["pts"]
+        _mark_team_task_done(gs, MT, task["id"])
         save_gs(gs)
         push_ev(kind, f"Team {MT} ({dn}) completed '{task['title']}' +{task['pts']} AP", MT)
         st.success(f"⚡ +{task['pts']} AP earned for {MT}!")
